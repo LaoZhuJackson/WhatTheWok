@@ -4,6 +4,7 @@ export {
     chat,
     generateMealSuggestion,
     generateDailySuggestions,
+    generateBatchMeals,
     aiMealToMeal,
 } from './deepseek'
 export type { DeepSeekConfig, AIRecommendedMeal } from './deepseek'

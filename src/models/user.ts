@@ -3,6 +3,7 @@
  * 静态数据，偶尔更新
  */
 export interface UserProfile {
+    id?: string
     name: string
     age: number
     gender: 'male' | 'female'

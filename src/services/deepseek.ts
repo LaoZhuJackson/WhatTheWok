@@ -1,4 +1,4 @@
-import { UserProfile, Meal, MealType } from "../models";
+import type { UserProfile, Meal, MealType } from "../models";
 import type { MacroTarget } from "../engine";
 import { getSettings } from "../db";
 
@@ -12,6 +12,7 @@ export interface DeepSeekConfig {
     model: string // "deepseek-v4-flash" 或 "deepseek-v4-pro"
     maxTokens?: number
     temperature?: number
+    reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 }
 
 /**
@@ -25,9 +26,10 @@ export async function getDeepSeekConfig(): Promise<DeepSeekConfig | null> {
     return {
         apiKey: settings.deepseekApiKey,
         baseUrl: settings.deepseekBaseUrl || 'https://api.deepseek.com',
-        model: 'deepseek-v4-flash',
-        maxTokens: 2048,
-        temperature: 0.7
+        model: 'deepseek-v4-pro',
+        maxTokens: 20480,
+        temperature: 0.7,
+        reasoningEffort: settings.deepseekReasoningEffort || 'low',
     }
 }
 
@@ -51,10 +53,15 @@ interface ChatMessage {
  *   429 → 请求太快
  *   5xx → DeepSeek 服务端问题
  */
+export interface ChatResult {
+    content: string
+    usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }
+}
+
 export async function chat(
     config: DeepSeekConfig,
     messages: ChatMessage[]
-): Promise<string> {
+): Promise<ChatResult> {
     const url = `${config.baseUrl}/chat/completions`
     const res = await fetch(url, {
         method: 'POST',
@@ -65,14 +72,14 @@ export async function chat(
         body: JSON.stringify({
             model: config.model,
             messages,
-            max_tokens: config.maxTokens ?? 2048,
+            max_tokens: config.maxTokens ?? 20480,
             temperature: config.temperature ?? 0.7,
+            reasoning_effort: config.reasoningEffort || 'low',
         }),
     })
 
     if (!res.ok) {
         const body = await res.text()
-        // 提取 DeepSeek 返回的错误信息
         let detail = body
         try {
             const json = JSON.parse(body)
@@ -82,7 +89,15 @@ export async function chat(
         throw new Error(`DeepSeek API ${res.status}: ${detail}`)
     }
     const json = await res.json()
-    return json.choices[0]?.message?.content ?? ''
+    const content = json.choices[0]?.message?.content ?? ''
+    const finishReason = json.choices[0]?.finish_reason
+    const usage = json.usage
+
+    if (!content || finishReason === 'length') {
+        console.warn('DeepSeek 响应异常:', { finishReason, usage, contentPreview: content?.slice(0, 200) })
+    }
+
+    return { content, usage }
 }
 
 // ═══════════════════════════════════════
@@ -95,7 +110,7 @@ export interface AIRecommendedMeal {
     protein: number
     carbs: number
     fat: number
-    ingredients: { name: string; grams: number; note?: string }[]
+    ingredients: { name: string; grams: number; unit?: string; note?: string }[]
     steps: string
     tags: string[]
     reason: string  // AI 给的推荐理由，展示给用户看
@@ -125,12 +140,15 @@ export async function generateMealSuggestion(
     mealType: MealType,
     calorieTarget: number,
     phase: number,
-    existingMealNames: string[] = []
+    existingMealNames: string[] = [],
+    userNote?: string
 ): Promise<AIRecommendedMeal> {
     const mealTypeLabel = mealType === 'breakfast' ? '早餐' : mealType === 'lunch' ? '午餐' : '晚餐'
     const systemPrompt = `你是一位专业健身营养师，为中国用户设计家常减脂餐。
         要求：
-    - 菜品必须是中餐家常菜（食材好买、做法简单）
+    - 菜品的食材最好比较好购买
+    - 用户偏向中餐，但是不拒绝其他菜品
+    - 推荐的菜品必须要真实存在，且搭配合理无毒
     - 热量控制在目标 ±10% 以内
     - 高蛋白、适量碳水、低脂
     - 步骤简洁明确，新手友好
@@ -148,6 +166,7 @@ export async function generateMealSuggestion(
     请为【${mealTypeLabel}】推荐一道菜：
     - 该餐目标热量：${calorieTarget} kcal
     ${existingMealNames.length > 0 ? `- 已有菜品请避免重复：${existingMealNames.join('、')}` : ''}
+    ${userNote ? `\n用户额外要求：${userNote}` : ''}
 
     请用以下 JSON 格式回复（不要输出其他内容）：
     {
@@ -158,28 +177,30 @@ export async function generateMealSuggestion(
         "carbs": 数字,
         "fat": 数字,
         "ingredients": [
-        { "name": "食材名", "grams": 克数, "note": "处理说明（可选）" }
+        { "name": "食材名", "grams": 数量, "unit": "g/ml/片/勺/个", "note": "处理说明" }
         ],
-        "steps": "做法步骤，用换行分隔",
+        "steps": "1. 第一步做什么\\n2. 第二步做什么\\n3. 第三步做什么（每步一个数字序号，用\\n换行分隔）",
         "tags": ["标签1", "标签2"],
         "reason": "为什么推荐这道菜（1-2句话）"
     }`
 
-    const content = await chat(config, [
+    const result = await chat(config, [
         {role: 'system', content: systemPrompt},
         {role: 'user', content: userPrompt}
     ])
-    // 解析 AI 返回的 JSON
-    // 注意：AI 可能返回 ```json ... ``` 包裹的内容，需要先剥掉
+    const content = result.content
     const jsonStr = content
         .replace(/```json\s*/g, '')
         .replace(/```\s*/g, '')
         .trim()
-    
+
     try{
-        return JSON.parse(jsonStr) as AIRecommendedMeal
+        const meal = JSON.parse(jsonStr) as AIRecommendedMeal
+        ;(meal as any)._usage = result.usage
+        return meal
     } catch{
-        throw new Error(`AI 返回格式异常，无法解析为 JSON。原始内容：${content.slice(0, 200)}`)
+        console.error('AI 单道生成原始返回:', content)
+        throw new Error(`AI 返回格式异常，无法解析。请按 F12 查看控制台完整返回内容。（前100字：${content.slice(0, 100)}…）`)
     }
 }
 
@@ -225,6 +246,117 @@ export async function generateDailySuggestions(
     )
 
     return { meals, total}
+}
+
+/**
+ * 批量生成同一餐型的多道菜
+ *
+ * 一次 API 调用返回 N 道菜，比循环调 N 次快很多。
+ * max_tokens 按每道菜 600 token 估算，乘以数量。
+ *
+ * @param count — 要生成几道菜（2-5）
+ */
+export async function generateBatchMeals(
+    config: DeepSeekConfig,
+    profile: UserProfile,
+    macros: MacroTarget,
+    mealType: MealType,
+    calorieTarget: number,
+    phase: number,
+    existingMealNames: string[],
+    count: number,
+    userNote?: string
+): Promise<AIRecommendedMeal[]> {
+    const mealTypeLabel = mealType === 'breakfast' ? '早餐' : mealType === 'lunch' ? '午餐' : '晚餐'
+
+    const systemPrompt = `你是一位专业健身营养师，为中国用户设计家常减脂餐。
+
+要求：
+- 菜品必须是中餐家常菜（食材好买、做法简单）
+- 热量控制在目标 ±10% 以内
+- 高蛋白、适量碳水、低脂
+- ${count} 道菜之间做法和主食材有明显差异（不要全是鸡胸肉）
+- 每道菜步骤简洁（3-5步），新手友好
+- 只输出 JSON 数组，不要解释`
+
+    const userPrompt = `用户情况：
+- 性别：${profile.gender === 'male' ? '男' : '女'}，年龄：${profile.age}岁
+- 身高：${profile.heightCm}cm，体重：${profile.currentWeightKg}kg
+- 当前阶段：Phase ${phase}
+
+今日营养目标（整日）：
+- 总热量：${macros.calories} kcal
+- 蛋白质：${macros.protein}g，碳水：${macros.carbs}g，脂肪：${macros.fat}g
+
+请为【${mealTypeLabel}】推荐 ${count} 道不同的菜：
+- 每道菜目标热量：${calorieTarget} kcal
+${existingMealNames.length > 0 ? `- 已有菜品请避免重复：${existingMealNames.join('、')}` : ''}
+${userNote ? `\n用户额外要求：${userNote}` : ''}
+
+请用以下 JSON 数组格式回复（不要输出其他内容）：
+[
+  {
+    "name": "菜品名",
+    "mealType": "${mealType}",
+    "calories": 数字,
+    "protein": 数字,
+    "carbs": 数字,
+    "fat": 数字,
+    "ingredients": [{ "name": "食材名", "grams": 数量, "unit": "g/ml/片/勺/个", "note": "处理说明" }],
+    "steps": "1. 第一步做什么\\n2. 第二步做什么\\n3. 第三步做什么（每步一个数字序号，用\\n换行分隔）",
+    "tags": ["标签1", "标签2"],
+    "reason": "推荐理由（1-2句话）"
+  },
+  ...
+]`
+
+    // 批量模式：关闭思考，token 拉到上限（128K，留一点余量）
+    const batchConfig: DeepSeekConfig = {
+        ...config,
+        maxTokens: 128000,
+        temperature: 0.3,  // 低温 = 输出更稳定，JSON 格式一致性更高
+    }
+
+    const result = await chat(batchConfig, [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+    ])
+    const content = result.content
+
+    if (!content || !content.trim()) {
+        console.error('AI 返回了空内容！', result.usage)
+        throw new Error('AI 返回空内容，可能是 token 不足（已用 ' + batchConfig.maxTokens + '），请减少数量重试')
+    }
+
+    const jsonStr = content
+        .replace(/```json\s*/g, '')
+        .replace(/```\s*/g, '')
+        .trim()
+
+    try {
+        const parsed = JSON.parse(jsonStr)
+        let meals: AIRecommendedMeal[] = []
+        if (Array.isArray(parsed)) {
+            meals = parsed.slice(0, count) as AIRecommendedMeal[]
+        } else if (parsed.meals && Array.isArray(parsed.meals)) {
+            meals = parsed.meals.slice(0, count) as AIRecommendedMeal[]
+        } else {
+            const arrKey = Object.keys(parsed).find(k => Array.isArray(parsed[k]))
+            if (arrKey) {
+                meals = (parsed[arrKey] as unknown[]).slice(0, count) as AIRecommendedMeal[]
+            }
+        }
+        if (meals.length > 0) {
+            ;(meals as any)._usage = result.usage
+            return meals
+        }
+        console.error('AI 批量返回无法提取数组:', JSON.stringify(parsed, null, 2))
+        throw new Error('AI 返回格式无法识别，请按 F12 查看控制台')
+    } catch (e) {
+        if (e instanceof Error && e.message.startsWith('AI 返回')) throw e
+        console.error('AI 批量解析失败，原始内容:', content)
+        throw new Error(`JSON 解析失败。请按 F12 查看控制台。（前100字：${content.slice(0, 100)}…）`)
+    }
 }
 
 /**

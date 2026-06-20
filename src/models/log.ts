@@ -26,6 +26,7 @@ export interface WeeklyLog {
  * source — 'watch'(手表精确数据) | 'manual'(手动上报) | 'estimated'(引擎估算)
  */
 export interface ExerciseRecord {
+    id?: number          // Dexie 自增主键
     date: string
     type: string        // "步行" | "骑行" | "爬楼" | "力量训练" | "跑步" | ...
     durationMinutes: number

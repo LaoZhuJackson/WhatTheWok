@@ -34,7 +34,7 @@ export class HealthDatabase extends Dexie{
             exerciseRecords:
                 '++id, date, type, source',
             userProfile:
-                '&name', //name做唯一键，毕竟是个人用户软件
+                '&id',
             bodyMeasurements:
                 '++id, date',
             settings:

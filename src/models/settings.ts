@@ -7,9 +7,11 @@
  *       用户的个人 key 需要运行时配置且持久化保存
  */
 export interface AppSettings {
+    id?: string
     // ---- AI ----
     deepseekApiKey?: string
-    deepseekBaseUrl?: string  // 默认 "https://api.deepseek.com/v1"，如果用代理可以改
+    deepseekBaseUrl?: string
+    deepseekReasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'  // 思考强度，默认 low
 
     // ---- 营养查询 ----
     nutritionixAppId?: string

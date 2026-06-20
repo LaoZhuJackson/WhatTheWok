@@ -21,7 +21,7 @@ export async function getUserProfile(): Promise<UserProfile | undefined>{
  * 保证始终只更新这一条，不会意外插入多条
  */
 export async function saveUserProfile(profile:UserProfile): Promise<void> {
-    await db.userProfile.put(profile, 'self')
+    await db.userProfile.put({ ...profile, id: 'self' }, 'self')
 }
 
 // ═══════════════════════════════════════

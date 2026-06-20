@@ -7,7 +7,8 @@
 export interface Ingredient {
     name: string
     grams: number
-    note?: string  // ? 表示可选字段
+    unit?: string   // 如 "g", "ml", "片", "勺", "个"
+    note?: string   // 处理说明（如"切片""焯水"）
 }
 
 /**

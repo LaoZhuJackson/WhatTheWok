@@ -9,6 +9,7 @@ import type { AppSettings } from '../models'
  */
 export function getDefaultSettings(): AppSettings{
     return {
+        id: 'app',
         enableShoppingReminder: false,
         enablePostMealReminder: false,
         enableActivityReminder: false,
@@ -50,7 +51,7 @@ export async function getSettings(): Promise<AppSettings> {
  */
 export async function updateSettings(updates: Partial<AppSettings>): Promise<void> {
     const current = await getSettings()
-    const merged: AppSettings = { ...current, ...updates}
-    await db.settings.put(merged, 'app')
+    const merged: AppSettings = { ...current, ...updates, id: 'app'}
+    await db.settings.put(merged)
 }
 

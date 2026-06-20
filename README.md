@@ -6,14 +6,29 @@
 
 ## ✨ 核心功能
 
-| 模块 | 说明 |
-|------|------|
-| 🧠 **AI 菜单推荐** | 读取你的阶段、体重、近期消耗，自动推荐三餐（热量+食材+做法） |
-| 📝 **菜品管理** | 手动录入 / AI 生成 / Nutritionix 查询三种来源，自动计算营养素 |
-| 🏃 **运动上报** | 步数 + 训练打卡 + 手表数据，引擎自动估算未记录的活动消耗 |
-| 📊 **周报统计** | 能量平衡趋势、体重/腰围变化、阶段进度、步数达标率 |
-| 🔔 **微信推送** | 饭后走路提醒、周末买菜提醒、运动不足告警（基于 WxPusher） |
-| 📱 **PWA** | 添加手机主屏幕即用，接近原生 App 体验 |
+| 模块 | 状态 | 说明 |
+|------|------|------|
+| 🧠 **AI 菜单推荐** | ✅ 已实现 | DeepSeek v4 单道/批量生成，支持 reasoning_effort 调节，token 用量显示 |
+| 📝 **菜品管理** | ✅ 已实现 | 手动录入 + AI 批量生成，智能步骤解析，食材单位/备注 |
+| 🏃 **运动上报** | ✅ 已实现 | 步数 + 训练打卡，引擎估算消耗（MET），SVG 趋势图 |
+| 📊 **周报统计** | ✅ 已实现 | 能量平衡、体重/腰围趋势、步数柱状图（本地日期修正） |
+| ⚙️ **设置管理** | ✅ 已实现 | 身体数据、API Key、思考强度、提醒开关，即时持久化 |
+| 🔔 **微信推送** | ✅ 代码就绪 | WxPusher 集成，需配置 appToken+UID 后启用 |
+| 💰 **价格追踪** | 🚧 引擎层完成 | 模型/DB/计算已就绪，缺少录入 UI 页面 |
+| 📦 **批量操作** | 🚧 待实现 | 批量删除/导出/导入菜品数据 |
+| 🔍 **营养查询** | ⏳ 等待审核 | Nutritionix API 代码就绪，等待开发者账号审核 |
+| 🚀 **部署上线** | 📋 待配置 | GitHub Pages 部署，PWA manifest 配置 |
+| 📱 **手机步数** | ❌ 不可行 | 浏览器无法访问 HealthKit/Health Connect，保持手动输入 |
+
+### 可行性评估（2026-06-21）
+
+| 功能 | 可行性 | 理由 |
+|------|--------|------|
+| 记录食材价格 | ✅ 可行 | 数据层和引擎层已完成，只需建 UI（1个页面/组件） |
+| 批量删除/导出/导入 | ✅ 可行 | Dexie 原生支持 bulkDelete/bulkPut，JSON 序列化即可 |
+| Nutritionix API | ⚠️ 阻塞 | 代码已完成，等待用户开发者账号审核通过 |
+| GitHub Pages 部署 | ✅ 可行 | Vite 原生支持，配置 `base` + GitHub Actions 即可 |
+| 手机步数自动获取 | ❌ 不可行 | 浏览器沙箱无系统健康数据权限；替代：手动输入（已有）或未来 Capacitor 原生包装 |
 
 ---
 
@@ -21,15 +36,15 @@
 
 | 层 | 选型 |
 |---|------|
-| 框架 | React 18 + TypeScript |
-| 构建 | Vite |
-| 样式 | Tailwind CSS |
-| 本地数据库 | Dexie.js（IndexedDB 封装） |
-| 路由 | React Router |
-| AI | DeepSeek API（chat + reasoner 双模） |
-| 营养查询 | Nutritionix API（可选） |
-| 推送 | WxPusher（微信） |
-| 部署 | GitHub Pages + PWA |
+| 框架 | React 19 + TypeScript 6 |
+| 构建 | Vite 8 |
+| 样式 | Tailwind CSS v4（`@import "tailwindcss"`） |
+| 本地数据库 | Dexie.js 4（IndexedDB 封装，7 张表） |
+| 导航 | Tab 状态切换（无路由库，编辑器独占全屏） |
+| AI | DeepSeek API v4（`deepseek-v4-pro`，支持 reasoning_effort） |
+| 营养查询 | Nutritionix API（可选，代码已就绪，等待审核通过） |
+| 推送 | WxPusher（微信推送，代码已就绪） |
+| 部署 | GitHub Pages（待配置） |
 
 ---
 
@@ -73,22 +88,53 @@ npm run dev
 ```
 health-hub/
 ├── src/
-│   ├── models/          # TypeScript 类型定义
-│   │   ├── meal.ts      # 菜品/食材
-│   │   ├── log.ts       # 日/周记录、运动消耗
-│   │   ├── user.ts      # 用户档案、身体测量
-│   │   └── settings.ts  # 应用配置
-│   ├── db/              # Dexie 数据库定义 + CRUD
-│   ├── engine/          # 业务逻辑（热量估算、推荐、AI上下文生成）
-│   ├── services/        # 外部 API 封装（DeepSeek、Nutritionix、WxPusher）
-│   ├── components/      # 可复用 React 组件
-│   ├── pages/           # 页面级组件
-│   ├── App.tsx
-│   └── main.tsx
-├── data/                # Git 追踪的结构化数据（示例文件）
-├── scripts/             # 定时任务（GitHub Actions 用）
-├── public/              # 静态资源 + PWA manifest
-└── .github/workflows/   # CI/CD + 定时检查
+│   ├── models/              # TypeScript 类型定义
+│   │   ├── meal.ts          # Meal, Ingredient, MealType
+│   │   ├── log.ts           # DailySnapshot, WeeklyLog, ExerciseRecord
+│   │   ├── user.ts          # UserProfile, BodyMeasurement
+│   │   ├── settings.ts      # AppSettings (API keys, reminder toggles)
+│   │   ├── shopping.ts      # PurchaseRecord (食材购买记录)
+│   │   └── index.ts         # barrel export (export type)
+│   ├── db/                  # Dexie 数据库 + CRUD
+│   │   ├── database.ts      # HealthDatabase class (7 tables, schema v1)
+│   │   ├── meals.ts         # 菜品 CRUD（含 bulkSave, getByType/Tag）
+│   │   ├── logs.ts          # 周日志 CRUD（upsertDailySnapshot）
+│   │   ├── exercises.ts     # 运动记录 CRUD
+│   │   ├── user.ts          # 用户档案 CRUD (key='self')
+│   │   ├── settings.ts      # 应用配置 CRUD (key='app')
+│   │   ├── purchases.ts     # 购买记录 CRUD
+│   │   └── index.ts         # 统一导出
+│   ├── engine/              # 业务逻辑（纯函数，不依赖 DB）
+│   │   ├── bmr.ts           # BMR/TDEE/热量缺口/宏量营养素计算
+│   │   ├── exercise-calories.ts  # 步数/运动热量估算 (MET)
+│   │   ├── recommender.ts   # 菜品推荐引擎（热量窗口+评分）
+│   │   ├── cost.ts          # 价格分析、渠道比价、每餐成本
+│   │   └── index.ts
+│   ├── services/            # 外部 API 封装
+│   │   ├── deepseek.ts      # DeepSeek AI（chat/completions）
+│   │   ├── nutritionix.ts   # Nutritionix（natural/search/instant）
+│   │   ├── wxpusher.ts      # WxPusher 微信推送
+│   │   └── index.ts
+│   ├── components/          # 可复用 UI 组件
+│   │   ├── Layout.tsx       # Tab bar 布局
+│   │   ├── MealCard.tsx     # 菜品卡片（食材+营养素+步骤）
+│   │   └── CalorieBar.tsx   # 热量进度条
+│   ├── pages/               # 页面组件
+│   │   ├── HomePage.tsx     # 首页（AI 推荐+今日数据）
+│   │   ├── MealsPage.tsx    # 菜品库（搜索/筛选/删除）
+│   │   ├── MealEditor.tsx   # 菜品编辑器（手动+AI批量生成）
+│   │   ├── HistoryPage.tsx  # 历史周报（步数/运动/体重图表）
+│   │   └── SettingsPage.tsx # 设置（身体数据+API Key+提醒开关）
+│   ├── App.tsx              # 顶级路由（tab + editor 切换）
+│   ├── main.tsx             # React DOM 入口
+│   └── index.css            # Tailwind v4 入口
+├── public/                  # 静态资源 (PWA manifest 等)
+├── index.html               # Vite 入口 HTML
+├── vite.config.ts
+├── package.json
+├── tsconfig.json
+├── .env.example
+└── .gitignore
 ```
 
 ---
