@@ -8,8 +8,7 @@ import {
     generateRecommendation,
     scoreRecommendation,
 } from "../engine";
-import type { DailyRecommendation, MealRecommendation } from '../engine'
-import type { Meal, WeeklyLog } from '../models'
+import type { DailyRecommendation } from '../engine'
 import MealCard from '../components/MealCard'
 import CalorieBar from '../components/CalorieBar'
 
@@ -23,7 +22,6 @@ export default function HomePage() {
             note: string
         }[]
     } | null>(null)
-    const [recentIds, setRecentIds] = useState<string[]>([])
 
     useEffect(() => {
         loadAndRecommend()
@@ -66,16 +64,11 @@ export default function HomePage() {
             // 6. 打分
             const s = scoreRecommendation(rec)
             setScore(s)
-            setRecentIds(recentIds)
         } catch (e) {
             setError(`出错了：${e instanceof Error ? e.message : '未知错误'}`)
         } finally {
             setLoading(false)
         }
-    }
-
-    function toMealType(key: string): 'breakfast' | 'lunch' | 'dinner' {
-        return key as 'breakfast' | 'lunch' | 'dinner'
     }
 
     const mealTypes: ('breakfast' | 'lunch' | 'dinner')[] = ['breakfast', 'lunch', 'dinner']
@@ -176,7 +169,7 @@ async function getRecentMealIds(): Promise<string[]> {
             .toArray()
         const ids: string[] = []
         for (const log of logs) {
-            for (const snap of log.dailySnapshots) {
+            for (const _snap of log.dailySnapshots) {
                 // 从每日快照的 training 字段中无法获取菜品 ID
                 // TODO: 暂时返回空数组 —— 后续在编辑器中手动记录后扩展
             }

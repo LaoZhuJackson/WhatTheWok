@@ -27,6 +27,8 @@ export default function MealsPage({ onEditMeal }: MealsPageProps) {
     const [searchText, setSearchText] = useState('')
     const [tagFilter, setTagFilter] = useState('')
 
+    const [showTagSuggestions, setShowTagSuggestions] = useState(false)
+
     useEffect(() => {
         loadMeals()
     }, [filterType]) // 首次挂载执行 + 每次 filterType 变化时执行
@@ -50,11 +52,16 @@ export default function MealsPage({ onEditMeal }: MealsPageProps) {
         await loadMeals()
     }
 
+    const allTags = [...new Set(meals.flatMap(m => m.tags))].sort()
+    // 根据输入过滤候选标签
+    const tagSuggestions = tagFilter
+        ? allTags.filter(t => t.toLowerCase().includes(tagFilter.toLowerCase()))
+        : allTags
     // 前端筛：搜索 + 标签
     const filtered = meals.filter(m => {
         if (searchText) {
             const q = searchText.toLowerCase()
-            if (!m.name.toLowerCase().includes(q) && !m.tags.some(t => t.toLowerCase().includes(q))) {
+            if (!m.name.toLowerCase().includes(q)) {
                 return false
             }
         }
@@ -87,16 +94,29 @@ export default function MealsPage({ onEditMeal }: MealsPageProps) {
                     type="text"
                     value={searchText}
                     onChange={e => setSearchText(e.target.value)}
-                    placeholder="搜索菜名或标签…"
+                    placeholder="搜索菜名"
                     className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white"
                 />
-                <input
-                    type="text"
-                    value={tagFilter}
-                    onChange={e => setTagFilter(e.target.value)}
-                    placeholder="标签"
-                    className="w-20 border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white"
-                />
+                <div className='relative'>
+                    <input
+                        type='text'
+                        value={tagFilter}
+                        onChange={e => setTagFilter(e.target.value)}
+                        onFocus={() => setShowTagSuggestions(true)}
+                        onBlur={() => setTimeout(() => setShowTagSuggestions(false), 150)}
+                        placeholder='按标签筛'
+                        className='w-30 border border-gay-200 rounded-lg px-3 py-2 text-sm' />
+                        {showTagSuggestions && tagSuggestions.length > 0 &&(
+                            <div className='absolute top-full left-0 right-0 mt-l bg-white border border-gray-200 rounded-lg shadow-lg z-10 max-h-40 overflow-y-auto'>
+                                {tagSuggestions.map(tag => (
+                                    <button key={tag} onMouseDown={() => { setTagFilter(tag); setShowTagSuggestions(false)}}
+                                        className={`w-full text-left px-3 py-1.5 text-sm hover:bg-green-50 ${ tag === tagFilter ? 'bg-green-100 text-green-700' : 'text-gray-600' }`}>
+                                            #{tag}
+                                        </button>
+                                ))}
+                            </div>
+                        )}
+                </div>
             </div>
             {/* 餐型筛选 */}
             <div className="flex gap-2 mb-4 overflow-x-auto">

@@ -2,10 +2,12 @@ import { useState, useEffect } from 'react'
 import {
     getWeeklyLog,
     saveWeeklyLog,
+    upsertDailySnapshot,
     getBodyMeasurements,
     getUserProfile,
     getExercisesByWeek,
     addExerciseRecord,
+    updateExerciseRecord,
     deleteExerciseRecord,
 } from '../db'
 import { calcStepsCalories } from '../engine'
@@ -134,16 +136,20 @@ export default function HistoryPage() {
         setExercises(records)
     }
 
-    // ── 更新某天快照（函数式 setState 杜绝 stale closure）──
+    // ── 更新某天快照（立即持久化到 DB）──
     function updateDay(idx: number, patch: Partial<DailySnapshot>) {
         setLog(prev => {
             if (!prev) return prev
+            const merged = { ...prev.dailySnapshots[idx], ...patch }
             const next = { ...prev }
             next.dailySnapshots = [...prev.dailySnapshots]
-            next.dailySnapshots[idx] = { ...prev.dailySnapshots[idx], ...patch }
+            next.dailySnapshots[idx] = merged
+            // 立即持久化到 DB（prev 保证是最新状态，杜绝 stale closure）
+            upsertDailySnapshot(weekStart, merged)
             return next
         })
-        setDirty(true)
+        setMsg('✅ 已自动保存')
+        setTimeout(() => setMsg(''), 1200)
     }
 
     // ── 运动记录操作 ──
@@ -168,6 +174,8 @@ export default function HistoryPage() {
         setExercises(prev =>
             prev.map(e => (e.id === id ? { ...e, ...patch } : e))
         )
+        // 立即持久化到 DB
+        updateExerciseRecord(id, patch)
     }
 
     // ── 保存 ──
@@ -209,6 +217,39 @@ export default function HistoryPage() {
 
     return (
         <div className="p-4 space-y-4 max-w-lg mx-auto">
+            <style>{`
+                @keyframes spark-drift-1 {
+                    0%   { transform: translate(0, 0) scale(1); opacity: 1; }
+                    30%  { transform: translate(3px, -6px) scale(0.8); opacity: 0.8; }
+                    60%  { transform: translate(-4px, -14px) scale(0.5); opacity: 0.4; }
+                    100% { transform: translate(2px, -24px) scale(0); opacity: 0; }
+                }
+                @keyframes spark-drift-2 {
+                    0%   { transform: translate(0, 0) scale(1); opacity: 0.9; }
+                    40%  { transform: translate(-5px, -10px) scale(0.7); opacity: 0.6; }
+                    70%  { transform: translate(3px, -20px) scale(0.3); opacity: 0.2; }
+                    100% { transform: translate(-2px, -30px) scale(0); opacity: 0; }
+                }
+                @keyframes spark-drift-3 {
+                    0%   { transform: translate(0, 0) scale(1); opacity: 1; }
+                    25%  { transform: translate(-2px, -5px) scale(0.9); opacity: 0.9; }
+                    55%  { transform: translate(6px, -16px) scale(0.4); opacity: 0.3; }
+                    100% { transform: translate(-3px, -28px) scale(0); opacity: 0; }
+                }
+                @keyframes flame-flicker {
+                    0%, 100% { filter: brightness(1); }
+                    50%  { filter: brightness(1.15); }
+                }
+                .flame-bar {
+                    animation: flame-flicker 1.5s ease-in-out infinite;
+                    background: linear-gradient(to top, #dc2626, #f97316, #fbbf24) !important;
+                    box-shadow: 0 0 6px rgba(239, 68, 68, 0.45);
+                }
+                .spark {
+                    position: absolute;
+                    border-radius: 50%;
+                }
+            `}</style>
             {/* ── 周选择器 ── */}
             <div className="flex items-center justify-between">
                 <button onClick={prevWeek} className="text-gray-400 hover:text-gray-600 text-xl px-2">‹</button>
@@ -229,34 +270,89 @@ export default function HistoryPage() {
                 <h3 className="text-xs text-gray-500 mb-3 font-medium">每日步数</h3>
                 <div className="flex items-end gap-1 h-32">
                     {days.map(d => {
+                        const stepPct = stepGoal > 0 ? (d.steps / stepGoal) * 100 : 0
                         const h = (d.steps / chartMax) * 100
                         const isToday = d.date === toLocalDate(new Date())
+
+                        // 颜色分级
+                        let barColor: string
+                        let showFlame = false
+                        if (stepPct >= 150) {
+                            barColor = 'flame-bar'
+                            showFlame = true
+                        } else if (stepPct >= 100) {
+                            barColor = isToday ? 'bg-green-500' : 'bg-green-400'
+                        } else if (stepPct >= 50) {
+                            barColor = isToday ? 'bg-yellow-500' : 'bg-yellow-400'
+                        } else {
+                            barColor = isToday ? 'bg-gray-400' : 'bg-gray-300'
+                        }
                         return (
-                            <div key={d.date} className="flex-1 flex flex-col items-center gap-1 h-full">
+                            <div key={d.date} className="flex-1 flex flex-col items-center gap-1 h-full relative">
+                                {/* 步数数值 */}
                                 <span className="text-[10px] text-gray-400 font-mono leading-none">
                                     {d.steps > 0 ? Math.round(d.steps / 1000) + 'k' : ''}
                                 </span>
-                                <div className="w-full flex-1 flex items-end justify-center pb-4">
+
+                                {/* 柱子区域 */}
+                                <div className="w-full flex-1 flex items-end justify-center relative">
                                     <div
-                                        className={`w-5/6 rounded-t transition-all ${
-                                            isToday ? 'bg-green-400' : 'bg-green-300'
-                                        }`}
+                                        className={`w-5/6 rounded-t transition-all ${barColor}`}
                                         style={{
                                             height: `${Math.max(h, 1)}%`,
                                             minHeight: d.steps > 0 ? '4px' : '1px',
                                         }}
-                                    />
+                                    >
+                                        {/* 篝火火星 */}
+                                        {showFlame && (
+                                            <>
+                                                <span className="spark" style={{
+                                                    left: '15%', top:
+                                                        '0px', width: '2px', height: '2px', background: '#fbbf24', animation: 'spark-drift-1 1.1s ease-out infinite', animationDelay: '0s'
+                                                }} />
+                                                <span className="spark" style={{
+                                                    left: '40%', top:
+                                                        '-2px', width: '3px', height: '3px', background: '#f97316', animation: 'spark-drift-2 1.4s ease-out infinite', animationDelay: '0.2s'
+                                                }} />
+                                                <span className="spark" style={{
+                                                    left: '65%', top:
+                                                        '-1px', width: '2px', height: '2px', background: '#fbbf24', animation: 'spark-drift-3 1.0s ease-out infinite', animationDelay: '0.35s'
+                                                }} />
+                                                <span className="spark" style={{
+                                                    left: '30%', top:
+                                                        '-4px', width: '2.5px', height: '2.5px', background: '#ef4444', animation: 'spark-drift-1 1.3s ease-out infinite', animationDelay: '0.5s'
+                                                }} />
+                                                <span className="spark" style={{
+                                                    left: '55%', top:
+                                                        '-3px', width: '2px', height: '2px', background: '#fbbf24', animation: 'spark-drift-2 0.95s ease-out infinite', animationDelay: '0.15s'
+                                                }} />
+                                                <span className="spark" style={{
+                                                    left: '75%', top:
+                                                        '-1px', width: '3px', height: '3px', background: '#f97316', animation: 'spark-drift-3 1.25s ease-out infinite', animationDelay: '0.6s'
+                                                }} />
+                                                <span className="spark" style={{
+                                                    left: '22%', top:
+                                                        '-5px', width: '1.5px', height: '1.5px', background: '#fbbf24', animation: 'spark-drift-1 1.15s ease-out infinite', animationDelay: '0.7s'
+                                                }} />
+                                                <span className="spark" style={{
+                                                    left: '48%', top:
+                                                        '-6px', width: '2px', height: '2px', background: '#ef4444', animation: 'spark-drift-2 1.05s ease-out infinite', animationDelay: '0.4s'
+                                                }} />
+                                            </>
+                                        )}
+                                    </div>
                                 </div>
-                                <span className={`text-[10px] leading-none ${
-                                    isToday ? 'text-green-600 font-semibold' : 'text-gray-400'
-                                }`}>
+
+                                {/* 星期标签 */}
+                                <span className={`text-[10px] leading-none ${isToday ? 'text-green-600 font-semibold' : 'text-gray-400'
+                                    }`}>
                                     {dayLabel(d.date)}
                                 </span>
                             </div>
                         )
                     })}
                 </div>
-                <div className="mt-1 flex justify-between text-[10px] text-red-400">
+                <div className="mt-1 flex justify-between text-[10px] text-gray-400">
                     <span>{chartMax.toLocaleString()}</span>
                     <span>目标 {stepGoal.toLocaleString()}</span>
                 </div>
@@ -327,9 +423,8 @@ function StatCard({ label, value, unit, highlight }: {
     highlight?: boolean
 }) {
     return (
-        <div className={`bg-white rounded-xl border px-2 py-3 text-center ${
-            highlight ? 'border-green-300 bg-green-50' : 'border-gray-100'
-        }`}>
+        <div className={`bg-white rounded-xl border px-2 py-3 text-center ${highlight ? 'border-green-300 bg-green-50' : 'border-gray-100'
+            }`}>
             <div className="text-lg font-bold text-gray-800">{value}</div>
             <div className="text-[10px] text-gray-400">{unit}</div>
             <div className="text-[10px] text-gray-400 mt-0.5">{label}</div>
@@ -354,9 +449,8 @@ function DayRow({ day, stepGoal, exercises, onChange, onAddExercise, onDeleteExe
     const stepPct = stepGoal > 0 ? Math.min(day.steps / stepGoal * 100, 100) : 0
 
     return (
-        <div className={`bg-white rounded-xl border px-3 py-2.5 ${
-            isToday ? 'border-green-300 shadow-sm' : 'border-gray-100'
-        }`}>
+        <div className={`bg-white rounded-xl border px-3 py-2.5 ${isToday ? 'border-green-300 shadow-sm' : 'border-gray-100'
+            }`}>
             {/* ── 第一行：日期 + 步数 + 饮食 ── */}
             <div className="flex items-center gap-2">
                 <div className="text-center min-w-[36px]">
@@ -377,9 +471,8 @@ function DayRow({ day, stepGoal, exercises, onChange, onAddExercise, onDeleteExe
                     />
                     <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
                         <div
-                            className={`h-full rounded-full transition-all ${
-                                stepPct >= 100 ? 'bg-green-400' : stepPct >= 50 ? 'bg-yellow-400' : 'bg-gray-300'
-                            }`}
+                            className={`h-full rounded-full transition-all ${stepPct >= 100 ? 'bg-green-400' : stepPct >= 50 ? 'bg-yellow-400' : 'bg-gray-300'
+                                }`}
                             style={{ width: `${stepPct}%` }}
                         />
                     </div>

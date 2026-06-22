@@ -32,6 +32,7 @@ export {
     getExerciseCaloriesByDateAndType,
     getExercisesByWeek,
     addExerciseRecord,
+    updateExerciseRecord,
     deleteExerciseRecord,
 } from './exercises'
 

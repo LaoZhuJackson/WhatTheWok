@@ -64,6 +64,19 @@ export async function addExerciseRecord(record:ExerciseRecord):Promise<number>{
 }
 
 /**
+ * 更新某条运动记录（部分字段）
+ *
+ * Dexie 的 update() 只修改传入的字段，不会覆盖整条记录
+ * 场景：修改运动类型、时长、热量、来源等
+ */
+export async function updateExerciseRecord(
+    id: number,
+    patch: Partial<ExerciseRecord>
+): Promise<void> {
+    await db.exerciseRecords.update(id, patch)
+}
+
+/**
  * 删除某条运动记录
  *
  * 因为主键是自增数字（number），删除时传 id 数字

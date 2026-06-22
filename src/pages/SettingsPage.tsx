@@ -4,18 +4,17 @@ import {
     saveUserProfile,
     getSettings,
     updateSettings,
-    getBodyMeasurements,
     addBodyMeasurement,
     getLatestBodyMeasurement,
 } from '../db'
 import type { UserProfile, BodyMeasurement, AppSettings } from '../models'
-import { isWxPusherReady, sendTestMessage, getWxPusherConfig, sendMessage } from '../services'
+import { isWxPusherReady, sendMessage } from '../services'
 
 export default function SettingsPage() {
     // ── 用户档案 ──
-    const [profile, setProfile] = useState<UserProfile | null>(null)
+    const [_profile, setProfile] = useState<UserProfile | null>(null)
     const [latestMeasurement, setLatestMeasurement] = useState<BodyMeasurement | null>(null)
-    const [profileMsg, setProfileMsg] = useState('')
+    const [_profileMsg, setProfileMsg] = useState('')
 
     // ── 身体测量 ──
     const [weightInput, setWeightInput] = useState('')
@@ -125,7 +124,7 @@ export default function SettingsPage() {
     }
 
     // ── 记录测量 ──
-    async function handleAddMeasurement(e: React.SyntheticEvent<HTMLFormElement>) {
+    async function handleAddMeasurement(_e: React.SyntheticEvent<HTMLFormElement>) {
         if (!weightInput) {
             setMeasureMsg('❌ 体重为必填项')
             setTimeout(() => setMeasureMsg(''), 2000)

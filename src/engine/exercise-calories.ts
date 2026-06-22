@@ -1,5 +1,3 @@
-import type { UserProfile } from "../models";
-
 /**
  * 运动类型及其 MET 值
  *

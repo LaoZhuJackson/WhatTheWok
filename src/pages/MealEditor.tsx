@@ -1,27 +1,13 @@
 import { useState, useEffect } from 'react'
 import { getMealById, saveMeal, getAllMeals, getUserProfile, bulkSaveMeals } from '../db'
 import type { Meal, MealType, Ingredient } from '../models'
-import { getDeepSeekConfig, generateMealSuggestion, generateBatchMeals, aiMealToMeal } from '../services'
+import { getDeepSeekConfig, generateMealSuggestion, generateBatchMeals } from '../services'
 import type { AIRecommendedMeal } from '../services'
 import { calcBMR, calcTDEE, calcCuttingCalories, calcMacros } from '../engine'
 
 interface MealEditorProps {
     mealId: string | null   // null = 新增
     onClose: () => void
-}
-
-const EMPTY_MEAL: Omit<Meal, 'id' | 'createdAt' | 'updatedAt'> = {
-    name: '',
-    mealType: 'lunch',
-    phase: [1],
-    calories: 0,
-    protein: 0,
-    carbs: 0,
-    fat: 0,
-    ingredients: [],
-    steps: '',
-    tags: [],
-    source: 'manual',
 }
 
 export default function MealEditor({ mealId, onClose }: MealEditorProps) {
