@@ -15,6 +15,15 @@ export async function getAllMeals(): Promise<Meal[]> {
 return db.meals.toArray()
 }
 
+ /**
+ * 批量删除菜品
+ *
+ * bulkDelete() 是 Dexie 内置方法，一条事务完成，比循环 delete 快
+ */
+export async function bulkDeleteMeals(ids:string[]): Promise<void>{
+    await db.meals.bulkDelete(ids)
+}
+
 /**
  * 按餐型获取菜品
  *

@@ -14,6 +14,7 @@ export {
     deleteMeal,
     clearAllMeals,
     getMealCount,
+    bulkDeleteMeals,
 } from './meals'
 
 // ── 周日志 CRUD ──

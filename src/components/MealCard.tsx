@@ -4,6 +4,10 @@ interface MealCardProps{
     meal: Meal
     calorieTarget: number
     mealType: 'breakfast' | 'lunch' | 'dinner'
+    isSwapping: boolean
+    candidates: Meal[]
+    onSwapClick: () => void
+    onSwapSelect: (meal: Meal) => void
 }
 
 const TYPE_LABEL: Record<string, string> = {
@@ -12,18 +16,30 @@ const TYPE_LABEL: Record<string, string> = {
     dinner: '🍲 晚餐',
 }
 
-export default function MealCard({meal, calorieTarget, mealType}:MealCardProps){
+export default function MealCard({meal, calorieTarget, mealType, isSwapping, candidates, onSwapClick, onSwapSelect}:MealCardProps){
     const delta = meal.calories - calorieTarget
     const deltaSign = delta >= 0 ? '+' : ''
     const deltaColor = Math.abs(delta) <= 50 ? 'text-green-600' : 'text-orange-500'
 
     return (
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 mb-3">
-            {/* 头部：餐型 + 热量差 */}
+            {/* 头部：餐型 + 换一道 + 热量差 */}
             <div className="flex items-center justify-between mb-3">
-                <span className="text-sm font-semibold text-gray-700">
-                    {TYPE_LABEL[mealType]}
-                </span>
+                <div className="flex items-center gap-2">
+                    <span className="text-sm font-semibold text-gray-700">
+                        {TYPE_LABEL[mealType]}
+                    </span>
+                    <button
+                        onClick={(e) => { e.stopPropagation(); onSwapClick() }}
+                        className={`text-xs rounded-lg px-2 py-0.5 border transition-colors ${
+                            isSwapping
+                                ? 'bg-green-500 text-white border-green-500'
+                                : 'text-green-500 hover:text-green-700 border-green-200'
+                        }`}
+                    >
+                        🔄 换一道
+                    </button>
+                </div>
                 <span className={`text-xs font-mono ${deltaColor}`}>
                     {meal.calories} kcal ({deltaSign}{delta} vs 目标 {calorieTarget})
                 </span>
@@ -46,6 +62,23 @@ export default function MealCard({meal, calorieTarget, mealType}:MealCardProps){
                         <span key={i} className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
                             {ing.name} {ing.grams}{ing.unit || 'g'}
                         </span>
+                    ))}
+                </div>
+            )}
+
+            {/* 候选替换列表 */}
+            {isSwapping && candidates.length > 0 && (
+                <div className="mt-3 pt-3 border-t border-gray-100 max-h-48 overflow-y-auto">
+                    <p className="text-xs text-gray-400 mb-2">选择替换菜品（按热量接近排序）</p>
+                    {candidates.map(c => (
+                        <button
+                            key={c.id}
+                            onClick={() => onSwapSelect(c)}
+                            className="w-full text-left px-3 py-2 rounded-lg hover:bg-green-50 flex items-center justify-between"
+                        >
+                            <span className="text-sm text-gray-700">{c.name}</span>
+                            <span className="text-xs text-gray-400">{c.calories} kcal · 蛋白{c.protein}g</span>
+                        </button>
                     ))}
                 </div>
             )}

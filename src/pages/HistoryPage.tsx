@@ -11,6 +11,7 @@ import {
     deleteExerciseRecord,
 } from '../db'
 import { calcStepsCalories } from '../engine'
+import type { ExerciseType } from '../engine'
 import type { WeeklyLog, DailySnapshot, BodyMeasurement, ExerciseRecord } from '../models'
 
 // ═══════════════════════════════════════
@@ -56,12 +57,13 @@ function emptySnapshot(date: string): DailySnapshot {
 }
 
 function ensureWeek(log: WeeklyLog | undefined, weekStart: string): WeeklyLog {
-    if (log) return log
     const snapshots: DailySnapshot[] = []
     for (let i = 0; i < 7; i++) {
-        snapshots.push(emptySnapshot(addDays(weekStart, i)))
+        const date = addDays(weekStart, i)
+        const existing = log?.dailySnapshots.find(d => d.date === date)
+        snapshots.push(existing || emptySnapshot(date))
     }
-    return { weekStart, dailySnapshots: snapshots }
+    return { weekStart, dailySnapshots: snapshots, weeklyNote: log?.weeklyNote }
 }
 
 // ═══════════════════════════════════════
@@ -69,21 +71,52 @@ function ensureWeek(log: WeeklyLog | undefined, weekStart: string): WeeklyLog {
 // ═══════════════════════════════════════
 
 const EXERCISE_TYPES: { value: string; label: string }[] = [
-    { value: '力量训练', label: '🏋️ 力量' },
-    { value: '爬坡走', label: '⛰️ 爬坡' },
     { value: '步行', label: '🚶 步行' },
+    { value: '快走', label: '🏃 快走' },
+    { value: '跑步', label: '🏃‍♂️ 跑步' },
     { value: '骑行', label: '🚲 骑行' },
-    { value: '跑步', label: '🏃 跑步' },
+    { value: '爬坡走', label: '⛰️ 爬坡' },
+    { value: '爬楼', label: '🏢 爬楼' },
+    { value: '跳绳', label: '🎽 跳绳' },
+    { value: '力量训练', label: '🏋️ 力量' },
+    { value: 'HIIT', label: '🔥 HIIT' },
     { value: '游泳', label: '🏊 游泳' },
+    { value: '篮球', label: '🏀 篮球' },
+    { value: '足球', label: '⚽ 足球' },
+    { value: '羽毛球', label: '🏸 羽毛球' },
+    { value: '跳舞', label: '💃 跳舞' },
+    { value: '椭圆机', label: '🔄 椭圆机' },
+    { value: '划船机', label: '🚣 划船' },
     { value: '瑜伽', label: '🧘 瑜伽' },
     { value: '其他', label: '📝 其他' },
 ]
 
 const EXERCISE_SOURCES: { value: ExerciseRecord['source']; label: string }[] = [
-    { value: 'watch', label: '⌚ 手表' },
-    { value: 'manual', label: '✍️ 手动' },
-    { value: 'estimated', label: '📊 估算' },
+    { value: 'manual', label: '✍️ 手动录入' },
+    { value: 'estimated', label: '📊 自动估算' },
 ]
+
+// MET 值映射（中文运动类型 → 代谢当量）
+const MET_BY_TYPE: Record<string, number> = {
+    '步行': 3.5,
+    '快走': 5.0,
+    '跑步': 8.3,
+    '骑行': 6.0,
+    '爬坡走': 8.0,
+    '爬楼': 8.0,
+    '跳绳': 10.0,
+    '力量训练': 5.0,
+    'HIIT': 8.0,
+    '游泳': 7.0,
+    '篮球': 6.0,
+    '足球': 7.0,
+    '羽毛球': 5.5,
+    '跳舞': 5.0,
+    '椭圆机': 5.0,
+    '划船机': 6.0,
+    '瑜伽': 2.5,
+    '其他': 4.0,
+}
 
 // ═══════════════════════════════════════
 // 主组件
@@ -159,7 +192,7 @@ export default function HistoryPage() {
             type: '力量训练',
             durationMinutes: 30,
             calories: 0,
-            source: 'watch',
+            source: 'manual',
         }
         const id = await addExerciseRecord(record)
         setExercises(prev => [...prev, { ...record, id }])
@@ -366,6 +399,7 @@ export default function HistoryPage() {
                         key={d.date}
                         day={d}
                         stepGoal={stepGoal}
+                        weightKg={weightKg}
                         exercises={getExercisesForDate(d.date)}
                         onChange={(patch) => updateDay(i, patch)}
                         onAddExercise={() => handleAddExercise(d.date)}
@@ -436,10 +470,11 @@ function StatCard({ label, value, unit, highlight }: {
 // 每日行（步数 + 饮食 + 运动子行）
 // ═══════════════════════════════════════
 
-function DayRow({ day, stepGoal, exercises, onChange, onAddExercise, onDeleteExercise, onUpdateExercise }: {
+function DayRow({ day, stepGoal, exercises, weightKg, onChange, onAddExercise, onDeleteExercise, onUpdateExercise }: {
     day: DailySnapshot
     stepGoal: number
     exercises: ExerciseRecord[]
+    weightKg: number
     onChange: (patch: Partial<DailySnapshot>) => void
     onAddExercise: () => void
     onDeleteExercise: (id: number) => void
@@ -494,7 +529,17 @@ function DayRow({ day, stepGoal, exercises, onChange, onAddExercise, onDeleteExe
                         <div key={ex.id} className="flex items-center gap-1 text-xs flex-wrap">
                             <select
                                 value={ex.type}
-                                onChange={e => onUpdateExercise(ex.id!, { type: e.target.value })}
+                                onChange={e => {
+                                    const newType = e.target.value
+                                    const patch: Partial<ExerciseRecord> = { type: newType }
+                                    if (ex.source === 'estimated') {
+                                        const met = MET_BY_TYPE[newType]
+                                        if (met && ex.durationMinutes > 0) {
+                                            patch.calories = Math.round(met * weightKg * (ex.durationMinutes / 60))
+                                        }
+                                    }
+                                    onUpdateExercise(ex.id!, patch)
+                                }}
                                 className="border border-gray-200 rounded px-1 py-0.5 bg-white text-xs"
                             >
                                 {EXERCISE_TYPES.map(t => (
@@ -505,7 +550,17 @@ function DayRow({ day, stepGoal, exercises, onChange, onAddExercise, onDeleteExe
                             <input
                                 type="number"
                                 value={ex.durationMinutes || ''}
-                                onChange={e => onUpdateExercise(ex.id!, { durationMinutes: +e.target.value })}
+                                onChange={e => {
+                                    const mins = +e.target.value
+                                    const patch: Partial<ExerciseRecord> = { durationMinutes: mins }
+                                    if (ex.source === 'estimated') {
+                                        const met = MET_BY_TYPE[ex.type]
+                                        if (met && mins > 0) {
+                                            patch.calories = Math.round(met * weightKg * (mins / 60))
+                                        }
+                                    }
+                                    onUpdateExercise(ex.id!, patch)
+                                }}
                                 placeholder="min"
                                 className="w-12 border border-gray-200 rounded px-1 py-0.5 text-xs"
                             />
@@ -522,9 +577,17 @@ function DayRow({ day, stepGoal, exercises, onChange, onAddExercise, onDeleteExe
 
                             <select
                                 value={ex.source}
-                                onChange={e =>
-                                    onUpdateExercise(ex.id!, { source: e.target.value as ExerciseRecord['source'] })
-                                }
+                                onChange={e => {
+                                    const newSource = e.target.value as ExerciseRecord['source']
+                                    const patch: Partial<ExerciseRecord> = { source: newSource }
+                                    if (newSource === 'estimated') {
+                                        const met = MET_BY_TYPE[ex.type]
+                                        if (met && ex.durationMinutes > 0) {
+                                            patch.calories = Math.round(met * weightKg * (ex.durationMinutes / 60))
+                                        }
+                                    }
+                                    onUpdateExercise(ex.id!, patch)
+                                }}
                                 className="border border-gray-200 rounded px-0.5 py-0.5 bg-white text-[10px]"
                             >
                                 {EXERCISE_SOURCES.map(s => (

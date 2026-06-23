@@ -9,12 +9,15 @@ import {
     scoreRecommendation,
 } from "../engine";
 import type { DailyRecommendation } from '../engine'
+import type { Meal, MealType } from '../models'
 import MealCard from '../components/MealCard'
 import CalorieBar from '../components/CalorieBar'
 
 export default function HomePage() {
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState('')
+    const [allMeals, setAllMeals] = useState<Meal[]>([])
+    const [swapMealType, setSwapMealType] = useState<MealType | null>(null)
     const [recommendation, setRecommendation] = useState<DailyRecommendation | null>(null)
     const [score, setScore] = useState<{
         score: number; breakdown: {
@@ -42,6 +45,7 @@ export default function HomePage() {
 
             // 2. 加载菜品库
             const meals = await getAllMeals()
+            setAllMeals(meals)
             if (meals.length === 0) {
                 setError('菜品库还是空的，先在「菜品」中添加一些菜吧')
                 setLoading(false)
@@ -69,6 +73,35 @@ export default function HomePage() {
         } finally {
             setLoading(false)
         }
+    }
+
+    // ── 换一道逻辑 ──
+    const swapCandidates = swapMealType
+        ? allMeals
+            .filter(m => m.mealType === swapMealType && m.id !== recommendation?.meals[swapMealType]?.meal.id)
+            .sort((a, b) => Math.abs(a.calories - (recommendation?.meals[swapMealType]?.calorieTarget ?? 500)) - Math.abs(b.calories - (recommendation?.meals[swapMealType]?.calorieTarget ?? 500)))
+            .slice(0, 12)
+        : []
+
+    function handleSwap(mealType: MealType, newMeal: Meal) {
+        if (!recommendation) return
+        const targetCal = recommendation.meals[mealType]?.calorieTarget ?? 500
+        const updated: DailyRecommendation = {
+            ...recommendation,
+            meals: {
+                ...recommendation.meals,
+                [mealType]: {
+                    meal: newMeal,
+                    calorieTarget: targetCal,
+                    delta: newMeal.calories - targetCal,
+                },
+            },
+        }
+        updated.totalCalories = Object.values(updated.meals)
+            .reduce((sum, r) => sum + (r?.meal.calories ?? 0), 0)
+        setRecommendation(updated)
+        setScore(scoreRecommendation(updated))
+        setSwapMealType(null)
     }
 
     const mealTypes: ('breakfast' | 'lunch' | 'dinner')[] = ['breakfast', 'lunch', 'dinner']
@@ -134,6 +167,10 @@ export default function HomePage() {
                         meal={rec.meal}
                         calorieTarget={rec.calorieTarget}
                         mealType={mt}
+                        isSwapping={swapMealType === mt}
+                        candidates={swapCandidates}
+                        onSwapClick={() => setSwapMealType(swapMealType === mt ? null : mt)}
+                        onSwapSelect={(meal) => handleSwap(mt, meal)}
                     />
                 ) : (
                     <div key={mt} className="bg-gray-50 rounded-xl border border-dashed border-gray-200 p-4 mb-3
