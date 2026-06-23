@@ -11,7 +11,6 @@ import {
     deleteExerciseRecord,
 } from '../db'
 import { calcStepsCalories } from '../engine'
-import type { ExerciseType } from '../engine'
 import type { WeeklyLog, DailySnapshot, BodyMeasurement, ExerciseRecord } from '../models'
 
 // ═══════════════════════════════════════
