@@ -5,7 +5,7 @@ import {
     addPurchaseRecord,
     deletePurchaseRecord,
 } from '../db'
-import { calcTotalSpend, groupByMonth } from '../engine'
+import { calcTotalSpend } from '../engine'
 import type { PurchaseRecord } from '../models'
 
 // 去重函数
