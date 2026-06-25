@@ -5,6 +5,7 @@ import SettingsPage from './pages/SettingsPage'
 import MealsPage from './pages/MealsPage'
 import MealEditor from './pages/MealEditor'
 import HistoryPage from './pages/HistoryPage'
+import PurchasesPage from './pages/PurchasesPage'
 import type { Page } from './pages/MealsPage'
 
 function App() {
@@ -32,6 +33,7 @@ function App() {
       case 'home': return <HomePage />
       case 'meals': return <MealsPage onEditMeal={handleEditMeal}/>
       case 'history': return <HistoryPage />
+      case 'purchases': return <PurchasesPage />
       case 'settings': return <SettingsPage />
     }
   }

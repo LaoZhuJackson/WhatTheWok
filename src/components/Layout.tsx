@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-export type Tab = 'home' | 'meals' | 'history' | 'settings'
+export type Tab = 'home' | 'meals' | 'history' | 'purchases' | 'settings'
 
 interface LayoutProps {
     activeTab: Tab
@@ -12,6 +12,7 @@ const TABS: { key: Tab; label: string; emoji: string }[] = [
     { key: 'home', label: '首页', emoji: '🏠' },
     { key: 'meals', label: '菜品', emoji: '🍳' },
     { key: 'history', label: '记录', emoji: '📋' },
+    { key: 'purchases', label: '记账', emoji: '💰' },
     { key: 'settings', label: '设置', emoji: '⚙️' },
 ]
 
