@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
-import { db, getUserProfile, getAllMeals } from '../db'
+import { db, getUserProfile, getAllMeals, upsertDailySnapshot } from '../db'
+import { toLocalDate, getMonday } from '../utils/date'
 import {
     calcBMR,
     calcTDEE,
@@ -74,6 +75,23 @@ export default function HomePage() {
             setLoading(false)
         }
     }
+
+    // 每次推荐变化 → 自动同步摄入量到记录页
+    useEffect(() => {
+        if(!recommendation) return
+        const today = toLocalDate(new Date())
+        const weekStart = getMonday(new Date())
+        db.weeklyLogs.get(weekStart).then(log => {
+            const existing = log?.dailySnapshots.find(d => d.date === today)
+            upsertDailySnapshot(weekStart, {
+                date: today,
+                steps: existing?.steps || 0,
+                ateOnPlan: existing?.ateOnPlan ?? false,
+                training: existing?.training || 'none',
+                caloriesIn: recommendation.totalCalories,
+            })
+        })
+    }, [recommendation])
 
     // ── 换一道逻辑 ──
     const swapCandidates = swapMealType
@@ -185,8 +203,7 @@ export default function HomePage() {
             {/* 刷新按钮 */}
             <button
                 onClick={loadAndRecommend}
-                className="w-full mt-2 py-3 bg-green-500 text-white rounded-xl font-medium hover:bg-green-600
-  active:scale-[0.98] transition-all"
+                className="w-full mt-2 py-3 bg-green-500 text-white rounded-xl font-medium hover:bg-green-600 active:scale-[0.98] transition-all"
             >
                 🔄 换一批推荐
             </button>

@@ -1,12 +1,13 @@
 /**
  * 每日快照
- * 对应你每天花10秒填的那4个字段
+ * 对应你每天填的那4个字段
  */
 export interface DailySnapshot {
     date: string       // "2026-06-17"
     steps: number      // 当日步数
     ateOnPlan: boolean // 饮食是否按计划
     training: string   // 训练内容描述，如 "A" / "B" / "步行" / "爬坡" / "none"
+    caloriesIn?: number // 从首页食谱同步过来的摄入量
 }
 
 /**

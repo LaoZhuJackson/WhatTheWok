@@ -10,36 +10,9 @@ import {
     updateExerciseRecord,
     deleteExerciseRecord,
 } from '../db'
-import { calcStepsCalories } from '../engine'
-import type { WeeklyLog, DailySnapshot, BodyMeasurement, ExerciseRecord } from '../models'
-
-// ═══════════════════════════════════════
-// 日期工具（全部使用本地时间，避免 UTC 偏移）
-// ═══════════════════════════════════════
-
-/** Date → "2026-06-21"（本地时间） */
-function toLocalDate(d: Date): string {
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
-
-/** "2026-06-21" → Date（本地时间） */
-function parseLocalDate(s: string): Date {
-    const [y, m, d] = s.split('-').map(Number)
-    return new Date(y, m - 1, d)
-}
-
-function getMonday(d: Date): string {
-    const date = new Date(d.getFullYear(), d.getMonth(), d.getDate())
-    const day = date.getDay() || 7 // 0=周日 → 7
-    date.setDate(date.getDate() - day + 1)
-    return toLocalDate(date)
-}
-
-function addDays(dateStr: string, n: number): string {
-    const d = parseLocalDate(dateStr)
-    d.setDate(d.getDate() + n)
-    return toLocalDate(d)
-}
+import { calcStepsCalories, calcBMR } from '../engine'
+import { toLocalDate, parseLocalDate, getMonday, addDays } from '../utils/date'
+import type { WeeklyLog, DailySnapshot, BodyMeasurement, ExerciseRecord, UserProfile } from '../models'
 
 function formatRange(monday: string): string {
     const sun = addDays(monday, 6)
@@ -129,7 +102,8 @@ export default function HistoryPage() {
     const [msg, setMsg] = useState('')
 
     const [measurements, setMeasurements] = useState<BodyMeasurement[]>([])
-    const [weightKg, setWeightKg] = useState(57.5)
+    const [profile, setProfile] = useState<UserProfile | null>(null)
+    const weightKg = profile?.currentWeightKg ?? 57.5
     const [stepGoal, setStepGoal] = useState(6000)
     const [note, setNote] = useState('')
 
@@ -158,8 +132,10 @@ export default function HistoryPage() {
 
     async function loadProfile() {
         const p = await getUserProfile()
-        if (p) setWeightKg(p.currentWeightKg)
-        if (p?.dailyStepsGoal) setStepGoal(p.dailyStepsGoal)
+        if(p){
+            setStepGoal(p.dailyStepsGoal || 6000)
+            setProfile(p)
+        }
     }
 
     async function loadExercises(ws: string) {
@@ -232,10 +208,17 @@ export default function HistoryPage() {
         (a, b) => a.date.localeCompare(b.date)
     )
     const avgSteps = Math.round(days.reduce((s, d) => s + d.steps, 0) / 7)
+    const bmr = profile ? calcBMR(profile) : 1450
     const onPlanDays = days.filter(d => d.ateOnPlan).length
+    const avgDeficit = Math.round(days.reduce((s, d) => {
+        const stepCals = calcStepsCalories(weightKg, d.steps || 0)
+        const dayExCals = exercises.filter(e => e.date === d.date).reduce((x, e) => x + e.calories, 0)
+        const out = bmr + stepCals + dayExCals
+        return s + out - (d.caloriesIn || 0)
+    }, 0) / 7)
     const exerciseCals = exercises.reduce((s, e) => s + e.calories, 0)
-    const totalCalFromSteps = days.reduce((s, d) => s + calcStepsCalories(weightKg, d.steps), 0)
-    const actualMax = Math.max(...days.map(d => d.steps), 1)
+    const totalCalFromSteps = days.reduce((s, d) => s + calcStepsCalories(weightKg, d.steps || 0), 0)
+    const actualMax = Math.max(...days.map(d => d.steps || 0), 1)
     // 柱状图上限：取实际最大值和目标的较大者，但至少 3000 防止全 0 时图太空
     const chartMax = Math.max(actualMax, Math.min(stepGoal, actualMax * 2 || 3000))
 
@@ -399,6 +382,7 @@ export default function HistoryPage() {
                         day={d}
                         stepGoal={stepGoal}
                         weightKg={weightKg}
+                        bmr={bmr}
                         exercises={getExercisesForDate(d.date)}
                         onChange={(patch) => updateDay(i, patch)}
                         onAddExercise={() => handleAddExercise(d.date)}
@@ -469,11 +453,12 @@ function StatCard({ label, value, unit, highlight }: {
 // 每日行（步数 + 饮食 + 运动子行）
 // ═══════════════════════════════════════
 
-function DayRow({ day, stepGoal, exercises, weightKg, onChange, onAddExercise, onDeleteExercise, onUpdateExercise }: {
+function DayRow({ day, stepGoal, exercises, weightKg, bmr, onChange, onAddExercise, onDeleteExercise, onUpdateExercise }: {
     day: DailySnapshot
     stepGoal: number
     exercises: ExerciseRecord[]
     weightKg: number
+    bmr: number
     onChange: (patch: Partial<DailySnapshot>) => void
     onAddExercise: () => void
     onDeleteExercise: (id: number) => void
@@ -481,6 +466,13 @@ function DayRow({ day, stepGoal, exercises, weightKg, onChange, onAddExercise, o
 }) {
     const isToday = day.date === new Date().toISOString().slice(0, 10)
     const stepPct = stepGoal > 0 ? Math.min(day.steps / stepGoal * 100, 100) : 0
+
+    // 热量缺口
+    const stepCals = day.steps > 0 ? calcStepsCalories(weightKg, day.steps) : 0
+    const exerciseCals = exercises.reduce((s, e) => s + e.calories, 0)
+    const totalOut = bmr + stepCals + exerciseCals
+    const deficit = day.caloriesIn ? totalOut - day.caloriesIn : 0
+    const hasData = !!(day.caloriesIn || exercises.length > 0 || day.steps > 0)
 
     return (
         <div className={`bg-white rounded-xl border px-3 py-2.5 ${isToday ? 'border-green-300 shadow-sm' : 'border-gray-100'
@@ -602,6 +594,30 @@ function DayRow({ day, stepGoal, exercises, weightKg, onChange, onAddExercise, o
                             </button>
                         </div>
                     ))}
+                </div>
+            )}
+
+            {/* ── 热量缺口 ── */}
+            {hasData && (
+                <div className="mt-1.5 ml-[36px] flex items-center gap-1 text-[10px] flex-wrap">
+                    <span className="text-gray-400">消耗 {Math.round(totalOut)}</span>
+                    {day.caloriesIn ? (
+                        <>
+                            <span className="text-gray-300">−</span>
+                            <span className="text-gray-400">摄入 {day.caloriesIn}</span>
+                            <span className="text-gray-300">=</span>
+                            {deficit > 0 ? (
+                                <span className="text-green-600 font-mono font-bold">🔥 -{Math.round(deficit)}</span>
+                            ) : deficit < 0 ? (
+                                <span className="text-red-500 font-mono font-bold">⚠️ +{Math.round(-deficit)}</span>
+                            ) : (
+                                <span className="text-gray-400 font-mono">0</span>
+                            )}
+                            <span className="text-gray-400">kcal</span>
+                        </>
+                    ) : (
+                        <span className="text-gray-400">（未记录摄入）</span>
+                    )}
                 </div>
             )}
 
