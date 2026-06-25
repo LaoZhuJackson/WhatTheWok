@@ -132,7 +132,7 @@ export default function HistoryPage() {
 
     async function loadProfile() {
         const p = await getUserProfile()
-        if(p){
+        if (p) {
             setStepGoal(p.dailyStepsGoal || 6000)
             setProfile(p)
         }
@@ -216,6 +216,7 @@ export default function HistoryPage() {
         const out = bmr + stepCals + dayExCals
         return s + out - (d.caloriesIn || 0)
     }, 0) / 7)
+    const deficitSign = avgDeficit >= 0 ? '+' : ''
     const exerciseCals = exercises.reduce((s, e) => s + e.calories, 0)
     const totalCalFromSteps = days.reduce((s, d) => s + calcStepsCalories(weightKg, d.steps || 0), 0)
     const actualMax = Math.max(...days.map(d => d.steps || 0), 1)
@@ -278,6 +279,7 @@ export default function HistoryPage() {
                 <StatCard label="饮食达标" value={`${onPlanDays}`} unit="/7天" highlight={onPlanDays >= 6} />
                 <StatCard label="运动消耗" value={`${exerciseCals}`} unit="kcal" />
                 <StatCard label="步数消耗" value={`${Math.round(totalCalFromSteps / 7)}`} unit="kcal/天" />
+                <StatCard label="周均缺口" value={`${deficitSign}${avgDeficit}`} unit="kcal/天" highlight={avgDeficit >= 200} />
             </div>
 
             {/* ── 每日步数柱状图 ── */}
