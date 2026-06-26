@@ -8,6 +8,7 @@ export interface DailySnapshot {
     ateOnPlan: boolean // 饮食是否按计划
     training: string   // 训练内容描述，如 "A" / "B" / "步行" / "爬坡" / "none"
     caloriesIn?: number // 从首页食谱同步过来的摄入量
+    extraCalories?: number // 额外摄入（零食、奶茶、宵夜等计划外）
 }
 
 /**

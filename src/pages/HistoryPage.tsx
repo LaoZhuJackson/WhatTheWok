@@ -473,8 +473,11 @@ function DayRow({ day, stepGoal, exercises, weightKg, bmr, onChange, onAddExerci
     const stepCals = day.steps > 0 ? calcStepsCalories(weightKg, day.steps) : 0
     const exerciseCals = exercises.reduce((s, e) => s + e.calories, 0)
     const totalOut = bmr + stepCals + exerciseCals
-    const deficit = day.caloriesIn ? totalOut - day.caloriesIn : 0
+    const totalIn = (day.caloriesIn || 0) + (day.extraCalories || 0)
+    const deficit = totalIn ? totalOut - totalIn : 0
     const hasData = !!(day.caloriesIn || exercises.length > 0 || day.steps > 0)
+
+    const [showExtra, setShowExtra] = useState(false)
 
     return (
         <div className={`bg-white rounded-xl border px-3 py-2.5 ${isToday ? 'border-green-300 shadow-sm' : 'border-gray-100'
@@ -505,10 +508,32 @@ function DayRow({ day, stepGoal, exercises, weightKg, bmr, onChange, onAddExerci
                         />
                     </div>
                 </div>
-
+                {/* 额外摄入 */}
+                {(showExtra || (day.extraCalories || 0) > 0) ? (
+                    <div className='flex items-center gap-0.5 shrink-0'>
+                        <input
+                            type='number'
+                            value={day.extraCalories || ''}
+                            onChange={e => onChange({extraCalories: +e.target.value})}
+                            onBlur={() => setShowExtra(false)}
+                            placeholder='0'
+                            className="w-12 text-xs border border-red-200 rounded px-1 py-0.5 text-red-600 bg-red-50"
+                            autoFocus
+                        />
+                        <span className='text-[9px] text-red-400'>kcal</span>
+                    </div>
+                ) : (
+                    <button
+                        onClick={() => setShowExtra(true)}
+                        className='text-sm shrink-0 opacity-40 hover:opacity-100 transition-opacity'
+                        title="记录额外摄入（零食/宵夜/加餐）"
+                    >
+                        🍩
+                    </button>
+                )}
                 <button
                     onClick={() => onChange({ ateOnPlan: !day.ateOnPlan })}
-                    className={`text-lg transition-colors shrink-0 ${day.ateOnPlan ? '' : 'opacity-30'}`}
+                    className={`text-sm transition-all shrink-0 ${day.ateOnPlan ? 'hover:opacity-100' : 'opacity-30 hover:opacity-50'}`}
                     title="饮食达标"
                 >
                     🥗
@@ -607,6 +632,9 @@ function DayRow({ day, stepGoal, exercises, weightKg, bmr, onChange, onAddExerci
                         <>
                             <span className="text-gray-300">−</span>
                             <span className="text-gray-400">摄入 {day.caloriesIn}</span>
+                            {day.extraCalories ? (
+                                <span className="text-red-400 text-[9px]">（含额外 +{day.extraCalories}）</span>
+                            ) : null}
                             <span className="text-gray-300">=</span>
                             {deficit > 0 ? (
                                 <span className="text-green-600 font-mono font-bold">🔥 -{Math.round(deficit)}</span>
