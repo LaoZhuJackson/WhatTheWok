@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useToast } from '../components/Toast'
 import {
     getWeeklyLog,
     saveWeeklyLog,
@@ -97,9 +98,9 @@ const MET_BY_TYPE: Record<string, number> = {
 export default function HistoryPage() {
     const [weekStart, setWeekStart] = useState(getMonday(new Date()))
     const [log, setLog] = useState<WeeklyLog | null>(null)
+    const toast = useToast()
     const [dirty, setDirty] = useState(false)
     const [saving, setSaving] = useState(false)
-    const [msg, setMsg] = useState('')
 
     const [measurements, setMeasurements] = useState<BodyMeasurement[]>([])
     const [profile, setProfile] = useState<UserProfile | null>(null)
@@ -156,8 +157,7 @@ export default function HistoryPage() {
             upsertDailySnapshot(weekStart, merged)
             return next
         })
-        setMsg('✅ 已自动保存')
-        setTimeout(() => setMsg(''), 1200)
+        toast.show('已自动保存', 'success', 1200)
     }
 
     // ── 运动记录操作 ──
@@ -194,8 +194,7 @@ export default function HistoryPage() {
         await saveWeeklyLog(toSave)
         setDirty(false)
         setSaving(false)
-        setMsg('✅ 已保存')
-        setTimeout(() => setMsg(''), 1500)
+        toast.show('已保存', 'success', 1500)
     }
 
     // ── 导航 ──
@@ -424,7 +423,6 @@ export default function HistoryPage() {
                     {saving ? '保存中…' : '💾 保存本周记录'}
                 </button>
             )}
-            {msg && <p className="text-xs text-center text-green-600">{msg}</p>}
 
             <div className="h-4" />
         </div>

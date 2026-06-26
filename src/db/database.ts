@@ -1,5 +1,5 @@
 import Dexie, { type Table } from 'dexie'
-import type { Meal, WeeklyLog, ExerciseRecord, UserProfile, BodyMeasurement, AppSettings, PurchaseRecord} from '../models'
+import type { Meal, WeeklyLog, ExerciseRecord, UserProfile, BodyMeasurement, AppSettings, PurchaseRecord, FoodReference} from '../models'
 
 /**
  * 数据库类：继承 Dexie，定义所有表结构
@@ -22,14 +22,15 @@ export class HealthDatabase extends Dexie{
     bodyMeasurements!: Table<BodyMeasurement, number>
     settings!: Table<AppSettings, string>
     purchaseRecords!: Table<PurchaseRecord,number>
+    foodReferences!: Table<FoodReference, string>
 
     constructor(){
         super('BROHealthHub')  // 数据库名称，在浏览器 DevTools → Application → IndexedDB 里能看到
         // 定义表结构 —— 每个版本用一个数字标记，方便以后迁移
         this.version(1).stores({
-            meals: 
+            meals:
                 '&id, mealType, calories, source, *phase, *tags',
-            weeklyLogs: 
+            weeklyLogs:
                 '&weekStart',
             exerciseRecords:
                 '++id, date, type, source',
@@ -42,7 +43,10 @@ export class HealthDatabase extends Dexie{
             purchaseRecords:
                 '++id, date, name, channelType, unitPrice',
         })
-        // TODO:this.version(2) 以后加字段时在这里追加
+        this.version(2).stores({
+            foodReferences:
+                '&name',
+        })
     }
 }
 

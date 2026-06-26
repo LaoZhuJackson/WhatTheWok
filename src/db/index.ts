@@ -53,6 +53,11 @@ export {
     getLatestBodyMeasurement,
 } from './user'
 
+// ── 食材参考库 CRUD ──
+export {
+    seedFoodReferences,
+} from './foodref'
+
 // ── 购买记录 CRUD ──
 export {
     getAllPurchases,

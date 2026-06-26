@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { useToast } from '../components/Toast'
 import {
     getAllMeals,
     getMealByType,
@@ -31,6 +32,7 @@ export default function MealsPage({ onEditMeal }: MealsPageProps) {
     const [showTagSuggestions, setShowTagSuggestions] = useState(false)
 
     // 批量操作
+    const toast = useToast()
     const [batchMode, setBatchMode] = useState(false)
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
     const fileInputRef = useRef<HTMLInputElement>(null)
@@ -123,10 +125,10 @@ export default function MealsPage({ onEditMeal }: MealsPageProps) {
                 id: crypto.randomUUID(),
             }))
             await bulkSaveMeals(imported)
-            alert(`✅ 成功导入 ${imported.length} 道菜品`)
+            toast.show(`成功导入 ${imported.length} 道菜品`, 'success', 4000)
             await loadMeals()
         } catch (e) {
-            alert(`❌ 导入失败：${e instanceof Error ? e.message : '未知错误'}`)
+            toast.show(`导入失败：${e instanceof Error ? e.message : '未知错误'}`, 'error', 4000)
         }
     }
 

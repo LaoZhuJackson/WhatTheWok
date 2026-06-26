@@ -1,9 +1,11 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { getMealById, saveMeal, getAllMeals, getUserProfile, bulkSaveMeals } from '../db'
-import type { Meal, MealType, Ingredient } from '../models'
+import type { Meal, MealType, Ingredient, FoodReference } from '../models'
 import { getDeepSeekConfig, generateMealSuggestion, generateBatchMeals, estimateIngredientsNutrition } from '../services'
 import type { AIRecommendedMeal } from '../services'
 import { calcBMR, calcTDEE, calcCuttingCalories, calcMacros } from '../engine'
+import { db } from '../db'
+import { useToast } from '../components/Toast'
 
 interface MealEditorProps {
     mealId: string | null   // null = 新增
@@ -18,8 +20,8 @@ export default function MealEditor({ mealId, onClose }: MealEditorProps) {
     const [aiShowResult, setAiShowResult] = useState(false)  // 生成完成后展示结果遮罩
     const [aiQueue, setAiQueue] = useState<AIRecommendedMeal[]>([])
     const [aiQueueIndex, setAiQueueIndex] = useState(0)
+    const toast = useToast()
     const [aiUsage, setAiUsage] = useState<{ prompt: number; completion: number; total: number } | null>(null)
-    const [msg, setMsg] = useState('')
 
     // AI 弹窗
     const [showAIDialog, setShowAIDialog] = useState(false)
@@ -40,6 +42,21 @@ export default function MealEditor({ mealId, onClose }: MealEditorProps) {
     const [ingredients, setIngredients] = useState<Ingredient[]>([])
     const [stepList, setStepList] = useState<string[]>([])
 
+    // ── 标签管理 ──
+    const [allTags, setAllTags] = useState<string[]>([])
+    const [selectedTags, setSelectedTags] = useState<string[]>([])
+    const [newTagInput, setNewTagInput] = useState('')
+
+    // 获取所有标签
+    async function loadAllTags() {
+        const all = await getAllMeals()
+        const tagSet = new Set<string>()
+        for (const m of all) {
+            for (const t of m.tags) tagSet.add(t)
+        }
+        setAllTags([...tagSet].sort())
+    }
+
     // ── 100g 换算器 ──
     const [per100Kcal, setPer100Kcal] = useState(0)
     const [per100Protein, setPer100Protein] = useState(0)
@@ -48,10 +65,44 @@ export default function MealEditor({ mealId, onClose }: MealEditorProps) {
     const [eatGrams, setEatGrams] = useState(100)
     const [per100Kj, setPer100Kj] = useState(0)
 
-    // ── 标签管理 ──
-    const [allTags, setAllTags] = useState<string[]>([])      // 历史所有标签
-    const [selectedTags, setSelectedTags] = useState<string[]>([]) // 当前菜用的标签
-    const [newTagInput, setNewTagInput] = useState('')
+    // ── 食材名实时搜索 ──
+    const allFoodRefs = useRef<FoodReference[]>([])
+    const [foodSuggestions, setFoodSuggestions] = useState<Map<number, FoodReference[]>>(new Map())
+    const [foodSuggestFocus, setFoodSuggestFocus] = useState<number | null>(null)
+
+    // 挂载时加载一次食材库到内存
+    useEffect(() => {
+        db.foodReferences.toArray()
+            .then(data => { allFoodRefs.current = data })
+            .catch(() => { allFoodRefs.current = [] })
+    }, [])
+
+    function matchScore(search: string, ref: FoodReference): number {
+        if (ref.name === search) return 1
+        if (ref.aliases?.includes(search)) return 1
+        if (ref.name.startsWith(search)) {
+            const extra = ref.name.length - search.length
+            let score = 0.90 - extra * 0.003
+            if (ref.name.includes('代表值')) score += 0.04
+            return score
+        }
+        const searchChars = [...new Set(search.replace(/\s/g, ''))]
+        const target = ref.name + ' ' + (ref.aliases || []).join(' ')
+        let hits = 0
+        for (const ch of searchChars) if (target.includes(ch)) hits++
+        return hits / searchChars.length
+    }
+
+    function searchFoods(query: string): FoodReference[] {
+        if (!query.trim()) return []
+        const q = query.trim()
+        return allFoodRefs.current
+            .map(ref => ({ ref, score: matchScore(q, ref) }))
+            .filter(r => r.score >= 0.3)
+            .sort((a, b) => b.score - a.score)
+            .slice(0, 8)
+            .map(r => r.ref)
+    }
 
     useEffect(() => {
         if (mealId) {
@@ -63,24 +114,28 @@ export default function MealEditor({ mealId, onClose }: MealEditorProps) {
     }, [mealId])
 
     async function loadMeal(id: string) {
-        const meal = await getMealById(id)
-        if (!meal) {
-            setMsg('菜品不存在')
+        try {
+            const meal = await getMealById(id)
+            if (!meal) {
+                toast.show('菜品不存在', 'error')
+                return
+            }
+            setName(meal.name)
+            setMealType(meal.mealType)
+            setPhase(meal.phase)
+            setCalories(meal.calories)
+            setProtein(meal.protein)
+            setCarbs(meal.carbs)
+            setFat(meal.fat)
+            setIngredients(meal.ingredients)
+            setStepList(meal.steps ? meal.steps.split('\n').filter(Boolean) : [])
+            setSelectedTags(meal.tags)
+            loadAllTags()
+        } catch (e) {
+            toast.show('加载失败：' + (e instanceof Error ? e.message : '未知错误'), 'error')
+        } finally {
             setLoading(false)
-            return
         }
-        setName(meal.name)
-        setMealType(meal.mealType)
-        setPhase(meal.phase)
-        setCalories(meal.calories)
-        setProtein(meal.protein)
-        setCarbs(meal.carbs)
-        setFat(meal.fat)
-        setIngredients(meal.ingredients)
-        setStepList(meal.steps ? meal.steps.split('\n').filter(Boolean) : [])
-        setSelectedTags(meal.tags)
-
-        setLoading(false)
     }
 
     // ── 食材列表操作 ──
@@ -118,7 +173,6 @@ export default function MealEditor({ mealId, onClose }: MealEditorProps) {
         setShowAIDialog(false)
         setAiLoading(true)
         setAiUsage(null)
-        setMsg('')
         setAiQueue([])
         setAiQueueIndex(0)
         let success = false
@@ -127,16 +181,14 @@ export default function MealEditor({ mealId, onClose }: MealEditorProps) {
             // 1. 检查 DeepSeek 配置
             const config = await getDeepSeekConfig()
             if (!config) {
-                setMsg('❌ 请先在「设置」中配置 DeepSeek API Key')
-                setTimeout(() => setMsg(''), 3000)
+                toast.show('请先在「设置」中配置 DeepSeek API Key', 'error')
                 return
             }
 
             // 2. 获取用户档案
             const profile = await getUserProfile()
             if (!profile) {
-                setMsg('❌ 请先在「设置」中填写身体数据')
-                setTimeout(() => setMsg(''), 3000)
+                toast.show('请先在「设置」中填写身体数据', 'error')
                 return
             }
 
@@ -165,7 +217,7 @@ export default function MealEditor({ mealId, onClose }: MealEditorProps) {
                 setSelectedTags([...ai.tags, 'ai'])
                 const u1 = (ai as any)._usage
                 if (u1) setAiUsage({ prompt: u1.prompt_tokens, completion: u1.completion_tokens, total: u1.total_tokens })
-                setMsg(`✅ AI 已生成「${ai.name}」— ${ai.reason}${u1 ? `（${u1.total_tokens} tokens）` : ''}`)
+                toast.show(`AI 已生成「${ai.name}」— ${ai.reason}${u1 ? `（${u1.total_tokens} tokens）` : ''}`, 'success')
                 success = true
             } else {
                 // ── 批量生成 ──
@@ -185,7 +237,7 @@ export default function MealEditor({ mealId, onClose }: MealEditorProps) {
                 setAiQueueIndex(0)
                 fillFormFromAI(meals[0])
                 setSelectedTags([...meals[0].tags, 'ai'])
-                setMsg(`✅ 已生成 ${meals.length} 道菜，当前第 1/${meals.length} 道 — 请审核后保存`)
+                toast.show(`已生成 ${meals.length} 道菜，当前第 1/${meals.length} 道 — 请审核后保存`, 'success')
                 success = true
 
                 // 补标签库
@@ -197,40 +249,91 @@ export default function MealEditor({ mealId, onClose }: MealEditorProps) {
             }
         } catch (e) {
             console.error('AI 生成失败:', e)
-            setMsg('❌ ' + (e instanceof Error ? e.message : 'AI 生成失败（按 F12 控制台查详情）'))
+            toast.show((e instanceof Error ? e.message : 'AI 生成失败'), 'error')
             setAiUsage(null)
         } finally {
             setAiLoading(false)
             if (success) setAiShowResult(true)
         }
     }
+    
+    /** 从本地食材库查找营养数据（仅精确匹配 + 别名，不模糊） */
+    async function estimateFromLocalFoodDB(ingredients: Ingredient[]) {
+        const allRefs = await db.foodReferences.toArray()
 
-    async function handleEstimateNutrition(){
+        const matched: Ingredient[] = []
+        const unknown: Ingredient[] = []
+
+        let totalCal = 0, totalProtein = 0, totalCarbs = 0, totalFat = 0
+
+        for (const ing of ingredients) {
+            let ref = allRefs.find(f => f.name === ing.name)
+            if (!ref) ref = allRefs.find(f => f.aliases?.includes(ing.name))
+            if (ref) {
+                matched.push(ing)
+                // 换算实际克重
+                let actualGrams = ing.amount
+                if (ing.unit !== 'g' && ref.unitWeight) {
+                    actualGrams = ing.amount * ref.unitWeight
+                }
+                const ratio = actualGrams / 100
+                totalCal += ref.kcalPer100 * ratio
+                totalProtein += ref.proteinPer100 * ratio
+                totalCarbs += ref.carbsPer100 * ratio
+                totalFat += ref.fatPer100 * ratio
+            } else {
+                unknown.push(ing)
+            }
+        }
+        return {
+            estimated: { calories: totalCal, protein: totalProtein, carbs: totalCarbs, fat: totalFat },
+            matched,
+            unknown,
+        }
+    }
+    // 点击估算营养后
+    async function handleEstimateNutrition() {
         const valid = ingredients.filter(i => i.name.trim() && i.amount > 0)
-        if(valid.length === 0){
-            setMsg('❌ 请先填写至少一个食材的名称和克重')
-            setTimeout(() => setMsg(''), 2000)
+        if (valid.length === 0) {
+            toast.show('请先填写至少一个食材的名称和克重', 'error')
             return
         }
         setEstimating(true)
-        try{
-            const config = await getDeepSeekConfig()
-            if(!config){
-                setMsg('❌ 请先在「设置」中配置 DeepSeek API Key')
-                setTimeout(() => setMsg(''), 2000)
-                return
+        try {
+            // 查本地食材库
+            const result = await estimateFromLocalFoodDB(valid)
+            // 有没命中的食材 → 调 AI 补算
+            if (result.unknown.length > 0) {
+                console.log('本地命中:', result.matched.map(i => i.name), '→', result.estimated)
+                console.log('发 AI 补算:', result.unknown.map(i => `${i.name} ${i.amount}${i.unit}`))
+                const config = await getDeepSeekConfig()
+                if (!config) {
+                    // 没配 Key → 只填命中的部分
+                    if (result.matched.length === 0) {
+                        toast.show('请先在「设置」中配置 DeepSeek API Key，或添加更多已知食材', 'error')
+                        setEstimating(false)
+                        return
+                    }
+                    toast.show(`${result.unknown.length} 种食材未命中本地库，配置 AI Key 后才可以用 AI 补全`, 'warn')
+                } else {
+                    const aiResult = await estimateIngredientsNutrition(config, result.unknown)
+                    result.estimated.calories += aiResult.calories
+                    result.estimated.protein += aiResult.protein
+                    result.estimated.carbs += aiResult.carbs
+                    result.estimated.fat += aiResult.fat
+                }
             }
-            const result = await estimateIngredientsNutrition(config, valid)
-            setCalories(result.calories)
-            setProtein(result.protein)
-            setCarbs(result.carbs)
-            setFat(result.fat)
-            const usage = (result as any)._usage
-            setMsg(`✅ AI 已估算营养数据${usage ? `（${usage.total_tokens} tokens）` : ''}`)
-            setTimeout(() => setMsg(''), 3000)
-        }catch(e){
-            setMsg('❌ ' + (e instanceof Error ? e.message : '估算失败'))
-            setTimeout(() => setMsg(''), 3000)
+            setCalories(Math.round(result.estimated.calories))
+            setProtein(+(result.estimated.protein).toFixed(1))
+            setCarbs(+(result.estimated.carbs).toFixed(1))
+            setFat(+(result.estimated.fat).toFixed(1))
+
+            const info = result.unknown.length > 0
+                ? `本地 ${result.matched.length} 种 + AI ${result.unknown.length} 种`
+                : `本地 ${result.matched.length} 种（0 token）`
+            toast.show(`已估算（${info}）`, 'success')
+        } catch (e) {
+            toast.show((e instanceof Error ? e.message : '估算失败'), 'error')
         } finally {
             setEstimating(false)
         }
@@ -244,7 +347,7 @@ export default function MealEditor({ mealId, onClose }: MealEditorProps) {
     // ── 保存当前并切到队列下一道 ──
     async function handleSaveAndNext() {
         const err = validate()
-        if (err) { setMsg('❌ ' + err); setTimeout(() => setMsg(''), 2000); return }
+        if (err) { toast.show(err, 'error'); return }
 
         setSaving(true)
         const now = new Date().toISOString()
@@ -267,10 +370,10 @@ export default function MealEditor({ mealId, onClose }: MealEditorProps) {
             setAiQueueIndex(nextIdx)
             fillFormFromAI(aiQueue[nextIdx])
             setSelectedTags([...aiQueue[nextIdx].tags, 'ai'])
-            setMsg(`✅ 已保存！当前第 ${nextIdx + 1}/${aiQueue.length} 道 — ${aiQueue[nextIdx].name}`)
+            toast.show(`已保存！当前第 ${nextIdx + 1}/${aiQueue.length} 道 — ${aiQueue[nextIdx].name}`, 'success')
         } else {
             setAiQueue([])
-            setMsg('✅ 全部保存完毕！')
+            toast.show('全部保存完毕！', 'success', 4000)
             setTimeout(() => onClose(), 800)
         }
     }
@@ -282,10 +385,10 @@ export default function MealEditor({ mealId, onClose }: MealEditorProps) {
             setAiQueueIndex(nextIdx)
             fillFormFromAI(aiQueue[nextIdx])
             setSelectedTags([...aiQueue[nextIdx].tags, 'ai'])
-            setMsg(`⏭️ 已跳过，当前第 ${nextIdx + 1}/${aiQueue.length} 道 — ${aiQueue[nextIdx].name}`)
+            toast.show(`已跳过，当前第 ${nextIdx + 1}/${aiQueue.length} 道 — ${aiQueue[nextIdx].name}`, 'warn')
         } else {
             setAiQueue([])
-            setMsg('队列已清空')
+            toast.show('队列已清空', 'warn')
         }
     }
 
@@ -299,19 +402,19 @@ export default function MealEditor({ mealId, onClose }: MealEditorProps) {
             id: 'ai-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6),
             name: ai.name, mealType: ai.mealType, phase: [dialogPhase],
             calories: ai.calories, protein: ai.protein, carbs: ai.carbs, fat: ai.fat,
-            ingredients: ai.ingredients.map(i => ({ name: i.name, amount: i.amount, note: i.note })),
+            ingredients: ai.ingredients.map(i => ({ name: i.name, amount: i.amount, unit: i.unit || 'g', note: i.note })),
             steps: ai.steps, tags: [...ai.tags, 'ai'], source: 'ai' as const,
             createdAt: now, updatedAt: now,
         }))
         await bulkSaveMeals(toSave)
         setAiQueue([])
         setSaving(false)
-        setMsg(`✅ 已将剩余 ${toSave.length} 道全部保存`)
+        toast.show(`已将剩余 ${toSave.length} 道全部保存`, 'success', 4000)
         setTimeout(() => onClose(), 800)
     }
 
     /** textarea 自动撑高（用户输入时） */
-    function autoGrow(e: React.FormEvent<HTMLTextAreaElement>) {
+    function autoGrow(e: React.SyntheticEvent<HTMLTextAreaElement>) {
         const el = e.currentTarget
         el.style.height = 'auto'
         el.style.height = el.scrollHeight + 'px'
@@ -389,7 +492,7 @@ export default function MealEditor({ mealId, onClose }: MealEditorProps) {
     async function handleSave() {
         const err = validate()
         if (err) {
-            setMsg('❌ ' + err)
+            toast.show(err, 'error')
             return
         }
 
@@ -423,17 +526,8 @@ export default function MealEditor({ mealId, onClose }: MealEditorProps) {
         }
 
         await saveMeal(meal)
-        setMsg('✅ 已保存')
+        toast.show('已保存', 'success')
         setTimeout(() => onClose(), 500)
-    }
-    // 获取所有标签
-    async function loadAllTags() {
-        const all = await getAllMeals()
-        const tagSet = new Set<string>()
-        for (const m of all) {
-            for (const t of m.tags) tagSet.add(t)
-        }
-        setAllTags([...tagSet].sort())
     }
 
     if (loading) {
@@ -560,21 +654,6 @@ export default function MealEditor({ mealId, onClose }: MealEditorProps) {
 
             {/* 表单 */}
             <div className="flex-1 p-4 space-y-5 max-w-lg mx-auto w-full">
-                {msg && (
-                    <div className={`text-sm py-2 px-3 rounded-lg flex items-start justify-between gap-2 ${
-                        msg.startsWith('✅') ? 'bg-green-50 text-green-700' :
-                        msg.startsWith('⏭️') ? 'bg-gray-50 text-gray-600' :
-                        'bg-red-50 text-red-600'
-                    }`}>
-                        <span className="flex-1">{msg}</span>
-                        <button
-                            onClick={() => setMsg('')}
-                            className="text-gray-400 hover:text-gray-600 text-base leading-none shrink-0"
-                        >
-                            ✕
-                        </button>
-                    </div>
-                )}
                 {aiQueue.length > 0 && (
                     <div className="bg-purple-50 border border-purple-200 rounded-lg p-3 text-xs space-y-1">
                         <p className="text-purple-600 font-medium">
@@ -807,19 +886,61 @@ export default function MealEditor({ mealId, onClose }: MealEditorProps) {
                         <div key={idx} className="bg-gray-50 rounded-lg p-2 space-y-1.5">
                             {/* 第一行：食材名 + 量 + 单位 + 删除 */}
                             <div className="flex items-start gap-1.5">
-                                <textarea
-                                    value={ing.name}
-                                    onChange={e => {
-                                        const next = [...ingredients]
-                                        next[idx] = { ...next[idx], name: e.target.value }
-                                        setIngredients(next)
-                                    }}
-                                    placeholder="食材名"
-                                    rows={1}
-                                    className="flex-1 min-w-0 border border-gray-200 rounded-lg px-2 py-1.5 text-sm resize-none overflow-hidden bg-white break-words"
-                                    data-autogrow
-                                    onInput={autoGrow}
-                                />
+                                <div className="relative flex-1 min-w-0">
+                                    <textarea
+                                        value={ing.name}
+                                        onChange={e => {
+                                            const value = e.target.value
+                                            const next = [...ingredients]
+                                            next[idx] = { ...next[idx], name: value }
+                                            setIngredients(next)
+                                            const results = searchFoods(value)
+                                            setFoodSuggestions(prev => new Map(prev).set(idx, results))
+                                            setFoodSuggestFocus(idx)
+                                        }}
+                                        onFocus={() => {
+                                            if (ing.name) {
+                                                const results = searchFoods(ing.name)
+                                                setFoodSuggestions(prev => new Map(prev).set(idx, results))
+                                            }
+                                            setFoodSuggestFocus(idx)
+                                        }}
+                                        onBlur={() => setTimeout(() => setFoodSuggestFocus(null), 150)}
+                                        placeholder="食材名"
+                                        rows={1}
+                                        className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm resize-none overflow-hidden bg-white break-words"
+                                        data-autogrow
+                                        onInput={autoGrow}
+                                    />
+                                    {foodSuggestFocus === idx && (foodSuggestions.get(idx)?.length ?? 0) > 0 && (
+                                        <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-10 max-h-44 overflow-y-auto">
+                                            {foodSuggestions.get(idx)!.map(ref => (
+                                                <button
+                                                    key={ref.name}
+                                                    type="button"
+                                                    onMouseDown={() => {
+                                                        const next = [...ingredients]
+                                                        next[idx] = {
+                                                            ...next[idx],
+                                                            name: ref.name,
+                                                        }
+                                                        if (ref.unitName) {
+                                                            next[idx].unit = ref.unitName
+                                                        }
+                                                        setIngredients(next)
+                                                        setFoodSuggestFocus(null)
+                                                    }}
+                                                    className="w-full text-left px-3 py-1.5 text-sm hover:bg-green-50 flex items-center justify-between"
+                                                >
+                                                    <span className="text-gray-700 truncate">{ref.name}</span>
+                                                    <span className="text-[10px] text-gray-400 shrink-0 ml-2">
+                                                        {ref.kcalPer100}kcal/100g
+                                                    </span>
+                                                </button>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
                                 <input
                                     type="number"
                                     value={ing.amount || ''}
@@ -1013,13 +1134,12 @@ export default function MealEditor({ mealId, onClose }: MealEditorProps) {
                                         key={t}
                                         type="button"
                                         onClick={() => setDialogMealType(t)}
-                                        className={`flex-1 py-2 text-sm rounded-lg border transition-colors ${
-                                            dialogMealType === t
-                                                ? 'bg-purple-500 text-white border-purple-500'
-                                                : 'bg-white text-gray-600 border-gray-200 hover:border-purple-300'
-                                        }`}
+                                        className={`flex-1 py-2 text-sm rounded-lg border transition-colors ${dialogMealType === t
+                                            ? 'bg-purple-500 text-white border-purple-500'
+                                            : 'bg-white text-gray-600 border-gray-200 hover:border-purple-300'
+                                            }`}
                                     >
-                                        {{breakfast: '🥣 早餐', lunch: '🍱 午餐', dinner: '🍲 晚餐'}[t]}
+                                        {{ breakfast: '🥣 早餐', lunch: '🍱 午餐', dinner: '🍲 晚餐' }[t]}
                                     </button>
                                 ))}
                             </div>
@@ -1034,11 +1154,10 @@ export default function MealEditor({ mealId, onClose }: MealEditorProps) {
                                         key={p}
                                         type="button"
                                         onClick={() => setDialogPhase(p)}
-                                        className={`flex-1 py-2 text-sm rounded-lg border transition-colors ${
-                                            dialogPhase === p
-                                                ? 'bg-purple-500 text-white border-purple-500'
-                                                : 'bg-white text-gray-600 border-gray-200 hover:border-purple-300'
-                                        }`}
+                                        className={`flex-1 py-2 text-sm rounded-lg border transition-colors ${dialogPhase === p
+                                            ? 'bg-purple-500 text-white border-purple-500'
+                                            : 'bg-white text-gray-600 border-gray-200 hover:border-purple-300'
+                                            }`}
                                     >
                                         Phase {p}
                                     </button>
@@ -1055,11 +1174,10 @@ export default function MealEditor({ mealId, onClose }: MealEditorProps) {
                                         key={n}
                                         type="button"
                                         onClick={() => setDialogCount(n)}
-                                        className={`flex-1 py-2 text-sm rounded-lg border transition-colors ${
-                                            dialogCount === n
-                                                ? 'bg-purple-500 text-white border-purple-500'
-                                                : 'bg-white text-gray-600 border-gray-200 hover:border-purple-300'
-                                        }`}
+                                        className={`flex-1 py-2 text-sm rounded-lg border transition-colors ${dialogCount === n
+                                            ? 'bg-purple-500 text-white border-purple-500'
+                                            : 'bg-white text-gray-600 border-gray-200 hover:border-purple-300'
+                                            }`}
                                     >
                                         {n}道
                                     </button>

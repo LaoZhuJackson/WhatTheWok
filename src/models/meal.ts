@@ -1,4 +1,21 @@
 /**
+ * 食材营养参考（每100g 基础数据）
+ *
+ * 数据来源：中国食物成分表标准版第6版
+ * 用于食材营养快速查询，未命中时回退到 AI 估算
+ */
+export interface FoodReference {
+    name: string           // 食材名 PK
+    kcalPer100: number     // 每100g/100ml 千卡
+    proteinPer100: number  // 每100g/100ml 蛋白 g
+    carbsPer100: number    // 每100g/100ml 碳水 g
+    fatPer100: number      // 每100g/100ml 脂肪 g
+    unitWeight?: number    // 非g单位换算基准，如鸡蛋1个≈50g
+    unitName?: string      // 如 "个"、"根"、"盒"
+    aliases?: string[]  // 别名，如 ["番茄", "西红柿"]
+}
+
+/**
  * 食材
  * name   — 食材名（如"鸡胸肉"）
  * amount — 数量

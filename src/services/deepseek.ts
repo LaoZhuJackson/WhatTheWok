@@ -391,6 +391,7 @@ export function aiMealToMeal(
         ingredients: ai.ingredients.map(ing => ({
             name: ing.name,
             amount: ing.amount,
+            unit: ing.unit || 'g',
             note: ing.note,
         })),
         steps: ai.steps,

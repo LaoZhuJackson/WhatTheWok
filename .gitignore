@@ -39,5 +39,6 @@ Thumbs.db
 # ---- 测试覆盖率 ----
 coverage
 
-# ---- TypeScript 增量编译 ----
-*.tsbuildinfo
+# ---- 外部数据源（不提交） ----
+china-food-composition-data-main
+scripts/
