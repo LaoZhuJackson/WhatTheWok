@@ -6,8 +6,9 @@ export {
     generateDailySuggestions,
     generateBatchMeals,
     aiMealToMeal,
+    estimateIngredientsNutrition,
 } from './deepseek'
-export type { DeepSeekConfig, AIRecommendedMeal } from './deepseek'
+export type { DeepSeekConfig, AIRecommendedMeal, NutritionEstimate } from './deepseek'
 
 // ── Nutritionix 营养查询 ──
 export {

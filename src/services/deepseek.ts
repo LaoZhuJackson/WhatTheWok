@@ -15,6 +15,13 @@ export interface DeepSeekConfig {
     reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 }
 
+export interface NutritionEstimate {
+    calories: number
+    protein: number
+    carbs: number
+    fat: number
+}
+
 /**
  * 用 Settings 里存的配置构造 DeepSeek 调用参数
  *
@@ -110,7 +117,7 @@ export interface AIRecommendedMeal {
     protein: number
     carbs: number
     fat: number
-    ingredients: { name: string; grams: number; unit?: string; note?: string }[]
+    ingredients: { name: string; amount: number; unit: string; note?: string }[]
     steps: string
     tags: string[]
     reason: string  // AI 给的推荐理由，展示给用户看
@@ -177,7 +184,7 @@ export async function generateMealSuggestion(
         "carbs": 数字,
         "fat": 数字,
         "ingredients": [
-        { "name": "食材名", "grams": 数量, "unit": "g/ml/片/勺/个", "note": "处理说明" }
+        { "name": "食材名", "amount": 数量, "unit": "g/ml/片/勺/个", "note": "处理说明" }
         ],
         "steps": "1. 第一步做什么\\n2. 第二步做什么\\n3. 第三步做什么（每步一个数字序号，用\\n换行分隔）",
         "tags": ["标签1", "标签2"],
@@ -185,8 +192,8 @@ export async function generateMealSuggestion(
     }`
 
     const result = await chat(config, [
-        {role: 'system', content: systemPrompt},
-        {role: 'user', content: userPrompt}
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
     ])
     const content = result.content
     const jsonStr = content
@@ -194,11 +201,11 @@ export async function generateMealSuggestion(
         .replace(/```\s*/g, '')
         .trim()
 
-    try{
+    try {
         const meal = JSON.parse(jsonStr) as AIRecommendedMeal
-        ;(meal as any)._usage = result.usage
+            ; (meal as any)._usage = result.usage
         return meal
-    } catch{
+    } catch {
         console.error('AI 单道生成原始返回:', content)
         throw new Error(`AI 返回格式异常，无法解析。请按 F12 查看控制台完整返回内容。（前100字：${content.slice(0, 100)}…）`)
     }
@@ -215,12 +222,12 @@ export async function generateDailySuggestions(
     profile: UserProfile,
     macros: MacroTarget,
     calorieTargets: Record<MealType, number>
-): Promise<{meals: AIRecommendedMeal[]; total:{calories: number; protein: number; carbs: number; fat: number }}>{
+): Promise<{ meals: AIRecommendedMeal[]; total: { calories: number; protein: number; carbs: number; fat: number } }> {
     const mealTypes: MealType[] = ['breakfast', 'lunch', 'dinner']
     const meals: AIRecommendedMeal[] = []
     const existingNames: string[] = []
 
-    for(const mealType of mealTypes){
+    for (const mealType of mealTypes) {
         const meal = await generateMealSuggestion(
             config,
             profile,
@@ -242,10 +249,10 @@ export async function generateDailySuggestions(
             carbs: sum.carbs + m.carbs,
             fat: sum.fat + m.fat,
         }),
-        { calories: 0, protein: 0, carbs: 0, fat: 0}
+        { calories: 0, protein: 0, carbs: 0, fat: 0 }
     )
 
-    return { meals, total}
+    return { meals, total }
 }
 
 /**
@@ -302,7 +309,7 @@ ${userNote ? `\n用户额外要求：${userNote}` : ''}
     "protein": 数字,
     "carbs": 数字,
     "fat": 数字,
-    "ingredients": [{ "name": "食材名", "grams": 数量, "unit": "g/ml/片/勺/个", "note": "处理说明" }],
+    "ingredients": [{ "name": "食材名", "amount": 数量, "unit": "g/ml/片/勺/个", "note": "处理说明" }],
     "steps": "1. 第一步做什么\\n2. 第二步做什么\\n3. 第三步做什么（每步一个数字序号，用\\n换行分隔）",
     "tags": ["标签1", "标签2"],
     "reason": "推荐理由（1-2句话）"
@@ -347,7 +354,7 @@ ${userNote ? `\n用户额外要求：${userNote}` : ''}
             }
         }
         if (meals.length > 0) {
-            ;(meals as any)._usage = result.usage
+            ; (meals as any)._usage = result.usage
             return meals
         }
         console.error('AI 批量返回无法提取数组:', JSON.stringify(parsed, null, 2))
@@ -383,7 +390,7 @@ export function aiMealToMeal(
         fat: ai.fat,
         ingredients: ai.ingredients.map(ing => ({
             name: ing.name,
-            grams: ing.grams,
+            amount: ing.amount,
             note: ing.note,
         })),
         steps: ai.steps,
@@ -391,5 +398,60 @@ export function aiMealToMeal(
         source: 'ai',
         createdAt: now,
         updatedAt: now,
+    }
+}
+
+/**
+ * 根据食材清单估算总营养数据
+ *
+ * 场景：用户手动录菜品，填了食材名和重量但不清楚营养数据，
+ * 调 AI 根据常见食物成分表估算整道菜的热量和宏量营养素。
+ */
+export async function estimateIngredientsNutrition(
+    config: DeepSeekConfig,
+    ingredients: { name: string; amount: number; unit: string }[]
+): Promise<NutritionEstimate> {
+    const ingredientList = ingredients
+        .filter(i => i.name.trim() && i.amount > 0)
+        .map(i => {
+            return `- ${i.name} ${i.amount}${i.unit}`
+        })
+        .join('\n')
+
+    const systemPrompt =
+        `你是一位专业的营养分析师。根据用户提供的食材名称和克重，估算整道菜的总营养数据（一人份）。
+    要求：
+    - 基于常见食物成分表和中国居民膳食指南估算
+    - 考虑烹调油（炒菜默认加 5-8g 油，约 45-70 kcal）
+    - 只输出 JSON，不要解释`
+
+    const userPrompt = `请估算以下食材组合的总营养数据：
+    ${ingredientList}
+
+    请用以下 JSON 格式回复（不要输出其他内容）：
+    {
+        "calories": 数字,
+        "protein": 数字,
+        "carbs": 数字,
+        "fat": 数字
+    }`
+
+    const result = await chat(config, [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+    ])
+
+    const jsonStr = result.content
+        .replace(/```json\s*/g, '')
+        .replace(/```\s*/g, '')
+        .trim()
+
+    try {
+        const data = JSON.parse(jsonStr) as NutritionEstimate
+            ; (data as any)._usage = result.usage
+        return data
+    } catch {
+        console.error('AI 营养估算原始返回:', result.content)
+        throw new Error(`AI 返回格式异常（前100字：${result.content.slice(0, 100)}…）`)
     }
 }

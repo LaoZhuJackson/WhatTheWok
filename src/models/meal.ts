@@ -1,14 +1,14 @@
 /**
  * 食材
  * name   — 食材名（如"鸡胸肉"）
- * grams  — 克重
+ * amount — 数量
  * note   — 处理说明（如"切片""一瓷勺"）
  */
 export interface Ingredient {
     name: string
-    grams: number
-    unit?: string   // 如 "g", "ml", "片", "勺", "个"
-    note?: string   // 处理说明（如"切片""焯水"）
+    amount: number
+    unit: string      // "g" | "ml" | "片" | "勺" | "个"
+    note?: string     // 处理说明（如"切片""焯水"）
 }
 
 /**

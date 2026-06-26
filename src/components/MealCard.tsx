@@ -60,7 +60,7 @@ export default function MealCard({meal, calorieTarget, mealType, isSwapping, can
                 <div className="flex flex-wrap gap-1 mb-3">
                     {meal.ingredients.map((ing, i) => (
                         <span key={i} className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
-                            {ing.name} {ing.grams}{ing.unit || 'g'}
+                            {ing.name} {ing.amount}{ing.unit}
                         </span>
                     ))}
                 </div>

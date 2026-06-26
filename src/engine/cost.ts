@@ -80,7 +80,7 @@ export function groupByMonth(
  *      函数本身是纯计算，不依赖数据库。
  */
 export function estimateMealCost(
-    ingredients: {name: string; grams: number}[],
+    ingredients: {name: string; amount: number}[],
     priceMap: Map<string, PurchaseRecord[]>
 ): {total: number; details: {name: string; cost: number}[]}{
     const details:{name:string; cost:number}[] = []
@@ -94,7 +94,7 @@ export function estimateMealCost(
 
         const avgPrice = calcAvgUnitPrice(records)
         // 按克重折算：假如 unitPrice 是 每500g/8元，用了200g → 8 × 200/500 = 3.2
-        const cost = +(avgPrice * ing.grams / getStandardGrams(records[0].unit)).toFixed(2)
+        const cost = +(avgPrice * ing.amount / getStandardGrams(records[0].unit)).toFixed(2)
 
         details.push({name:ing.name, cost})
     }

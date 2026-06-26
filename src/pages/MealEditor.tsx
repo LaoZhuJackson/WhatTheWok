@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { getMealById, saveMeal, getAllMeals, getUserProfile, bulkSaveMeals } from '../db'
 import type { Meal, MealType, Ingredient } from '../models'
-import { getDeepSeekConfig, generateMealSuggestion, generateBatchMeals } from '../services'
+import { getDeepSeekConfig, generateMealSuggestion, generateBatchMeals, estimateIngredientsNutrition } from '../services'
 import type { AIRecommendedMeal } from '../services'
 import { calcBMR, calcTDEE, calcCuttingCalories, calcMacros } from '../engine'
 
@@ -27,6 +27,8 @@ export default function MealEditor({ mealId, onClose }: MealEditorProps) {
     const [dialogMealType, setDialogMealType] = useState<MealType>('lunch')
     const [dialogPhase, setDialogPhase] = useState(1)
     const [dialogNote, setDialogNote] = useState('')
+
+    const [estimating, setEstimating] = useState(false)
 
     const [name, setName] = useState('')
     const [mealType, setMealType] = useState<MealType>('lunch')
@@ -83,7 +85,7 @@ export default function MealEditor({ mealId, onClose }: MealEditorProps) {
 
     // ── 食材列表操作 ──
     function addIngredient() {
-        setIngredients([...ingredients, { name: '', grams: 0, unit: 'g' }])
+        setIngredients([...ingredients, { name: '', amount: 0, unit: 'g' }])
     }
 
     function updateIngredient(idx: number, field: keyof Ingredient, value: string | number) {
@@ -203,6 +205,37 @@ export default function MealEditor({ mealId, onClose }: MealEditorProps) {
         }
     }
 
+    async function handleEstimateNutrition(){
+        const valid = ingredients.filter(i => i.name.trim() && i.amount > 0)
+        if(valid.length === 0){
+            setMsg('❌ 请先填写至少一个食材的名称和克重')
+            setTimeout(() => setMsg(''), 2000)
+            return
+        }
+        setEstimating(true)
+        try{
+            const config = await getDeepSeekConfig()
+            if(!config){
+                setMsg('❌ 请先在「设置」中配置 DeepSeek API Key')
+                setTimeout(() => setMsg(''), 2000)
+                return
+            }
+            const result = await estimateIngredientsNutrition(config, valid)
+            setCalories(result.calories)
+            setProtein(result.protein)
+            setCarbs(result.carbs)
+            setFat(result.fat)
+            const usage = (result as any)._usage
+            setMsg(`✅ AI 已估算营养数据${usage ? `（${usage.total_tokens} tokens）` : ''}`)
+            setTimeout(() => setMsg(''), 3000)
+        }catch(e){
+            setMsg('❌ ' + (e instanceof Error ? e.message : '估算失败'))
+            setTimeout(() => setMsg(''), 3000)
+        } finally {
+            setEstimating(false)
+        }
+    }
+
     function closeAiResult() {
         setAiShowResult(false)
         setAiUsage(null)
@@ -266,7 +299,7 @@ export default function MealEditor({ mealId, onClose }: MealEditorProps) {
             id: 'ai-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6),
             name: ai.name, mealType: ai.mealType, phase: [dialogPhase],
             calories: ai.calories, protein: ai.protein, carbs: ai.carbs, fat: ai.fat,
-            ingredients: ai.ingredients.map(i => ({ name: i.name, grams: i.grams, note: i.note })),
+            ingredients: ai.ingredients.map(i => ({ name: i.name, amount: i.amount, note: i.note })),
             steps: ai.steps, tags: [...ai.tags, 'ai'], source: 'ai' as const,
             createdAt: now, updatedAt: now,
         }))
@@ -297,7 +330,7 @@ export default function MealEditor({ mealId, onClose }: MealEditorProps) {
     }, [stepList, ingredients])
 
     /** 把 AI 返回数据填入编辑表单 */
-    function fillFormFromAI(ai: { name: string; calories: number; protein: number; carbs: number; fat: number; ingredients: { name: string; grams: number; unit?: string; note?: string }[]; steps: string; tags: string[]; reason?: string }) {
+    function fillFormFromAI(ai: { name: string; calories: number; protein: number; carbs: number; fat: number; ingredients: { name: string; amount: number; unit: string; note?: string }[]; steps: string; tags: string[]; reason?: string }) {
         setName(ai.name)
         setCalories(ai.calories)
         setProtein(ai.protein)
@@ -305,7 +338,7 @@ export default function MealEditor({ mealId, onClose }: MealEditorProps) {
         setFat(ai.fat)
         setIngredients(ai.ingredients.map(i => ({
             name: i.name,
-            grams: i.grams,
+            amount: i.amount,
             unit: i.unit,
             note: i.note,
         })))
@@ -472,7 +505,7 @@ export default function MealEditor({ mealId, onClose }: MealEditorProps) {
                     ) : (
                         <button
                             onClick={handleSave}
-                            disabled={saving || aiLoading}
+                            disabled={saving || aiLoading || estimating}
                             className="px-4 py-1.5 bg-green-500 text-white text-sm rounded-lg font-medium hover:bg-green-600 disabled:opacity-50"
                         >
                             {saving ? '保存中…' : '保存'}
@@ -754,6 +787,14 @@ export default function MealEditor({ mealId, onClose }: MealEditorProps) {
                         >
                             ＋ 加食材
                         </button>
+                        <button
+                            type="button"
+                            onClick={handleEstimateNutrition}
+                            disabled={estimating || ingredients.length === 0}
+                            className='text-xs text-purple-500 hover:text-purple-600 px-2 py-1 border border-purple-200 rounded-lg disabled:opacity-30'
+                        >
+                            {estimating ? '⏳ 估算中…' : '🤖 估算营养'}
+                        </button>
                     </div>
 
                     {ingredients.length === 0 && (
@@ -781,8 +822,8 @@ export default function MealEditor({ mealId, onClose }: MealEditorProps) {
                                 />
                                 <input
                                     type="number"
-                                    value={ing.grams || ''}
-                                    onChange={e => updateIngredient(idx, 'grams', +e.target.value)}
+                                    value={ing.amount || ''}
+                                    onChange={e => updateIngredient(idx, 'amount', +e.target.value)}
                                     placeholder="量"
                                     className="w-14 border border-gray-200 rounded px-1.5 py-1.5 text-sm bg-white shrink-0"
                                 />

@@ -203,14 +203,14 @@ export async function getStandardNutrition(
  */
 export async function getMealNutrition(
     config: NutritionixConfig,
-    ingredients: { name:string;grams:number}[]
+    ingredients: { name:string; amount:number}[]
 ): Promise<{
     items: NutritionInfo[]
     total: { calories: number; protein: number; carbs: number; fat: number }
 }>{
     // 把食材拼成自然语言查询字符串
     const query = ingredients
-        .map(ing => `${ing.grams}g ${ing.name}`)
+        .map(ing => `${ing.amount}g ${ing.name}`)
         .join(', ')
     
     const items = await searchNatural(config, query)
