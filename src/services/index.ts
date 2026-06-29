@@ -7,6 +7,7 @@ export {
     generateBatchMeals,
     aiMealToMeal,
     estimateIngredientsNutrition,
+    calibrateMealNutrition,
 } from './deepseek'
 export type { DeepSeekConfig, AIRecommendedMeal, NutritionEstimate } from './deepseek'
 

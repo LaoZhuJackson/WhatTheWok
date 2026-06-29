@@ -1,6 +1,6 @@
-import type { UserProfile, Meal, MealType } from "../models";
+import type { Ingredient, UserProfile, Meal, MealType, DailySnapshot, ExerciseRecord } from "../models";
 import type { MacroTarget } from "../engine";
-import { getSettings } from "../db";
+import { db, getSettings } from "../db";
 
 // ═══════════════════════════════════════
 // 类型
@@ -22,6 +22,25 @@ export interface NutritionEstimate {
     fat: number
 }
 
+// ═══════════════════════════════════════
+// AI 周分析
+// ═══════════════════════════════════════
+
+export interface AnalysisSection {
+    emoji: string
+    title: string
+    content: string
+    suggestion: string
+    rating: 'great' | 'good' | 'warning' | 'poor'
+}
+
+export interface WeekAnalysis {
+    overview: string
+    overallRating: 'excellent' | 'good' | 'warning' | 'poor'
+    sections: AnalysisSection[]
+    nextWeekFocus: string
+}
+
 /**
  * 用 Settings 里存的配置构造 DeepSeek 调用参数
  *
@@ -38,6 +57,32 @@ export async function getDeepSeekConfig(): Promise<DeepSeekConfig | null> {
         temperature: 0.7,
         reasoningEffort: settings.deepseekReasoningEffort || 'low',
     }
+}
+
+// ═══════════════════════════════════════
+// JSON 修复（AI 偶尔输出非法 JSON 的兜底）
+// ═══════════════════════════════════════
+
+/**
+ * 修复 AI 返回 JSON 中常见的格式错误
+ *
+ * 典型错误：
+ *   "amount": 适量  →  "amount": 1
+ *   "amount": 少许  →  "amount": 1
+ */
+function repairAIJson(jsonStr: string): string {
+    return jsonStr
+        // 修复 amount 字段的非数字值
+        .replace(/"amount"\s*:\s*适量/g, '"amount": 1')
+        .replace(/"amount"\s*:\s*少许/g, '"amount": 1')
+        .replace(/"amount"\s*:\s*若干/g, '"amount": 5')
+        .replace(/"amount"\s*:\s*适量/g, '"amount": 1')
+        .replace(/"amount"\s*:\s*半勺/g, '"amount": 3')
+        .replace(/"amount"\s*:\s*一勺/g, '"amount": 5')
+        .replace(/"amount"\s*:\s*一小勺/g, '"amount": 2')
+        .replace(/"amount"\s*:\s*一大勺/g, '"amount": 10')
+        .replace(/"amount"\s*:\s*一小撮/g, '"amount": 0.5')
+        .replace(/"amount"\s*:\s*几滴/g, '"amount": 0.5')
 }
 
 // ═══════════════════════════════════════
@@ -159,6 +204,7 @@ export async function generateMealSuggestion(
     - 热量控制在目标 ±10% 以内
     - 高蛋白、适量碳水、低脂
     - 步骤简洁明确，新手友好
+    - ingredients 中 amount 必须是数字（调料如盐≈2g、生抽≈5ml、料酒≈5ml，不要写"适量""少许"等文字）
     - 只输出 JSON，不要解释`
 
     const userPrompt = `用户情况：
@@ -196,10 +242,10 @@ export async function generateMealSuggestion(
         { role: 'user', content: userPrompt }
     ])
     const content = result.content
-    const jsonStr = content
+    const jsonStr = repairAIJson(content
         .replace(/```json\s*/g, '')
         .replace(/```\s*/g, '')
-        .trim()
+        .trim())
 
     try {
         const meal = JSON.parse(jsonStr) as AIRecommendedMeal
@@ -283,7 +329,8 @@ export async function generateBatchMeals(
 - 热量控制在目标 ±10% 以内
 - 高蛋白、适量碳水、低脂
 - ${count} 道菜之间做法和主食材有明显差异（不要全是鸡胸肉）
-- 每道菜步骤简洁（3-5步），新手友好
+- 每道菜步骤描述简洁清晰，新手友好
+- ingredients 中 amount 必须是数字（调料如盐≈2g、生抽≈5ml、料酒≈5ml，不要写"适量""少许"等文字）
 - 只输出 JSON 数组，不要解释`
 
     const userPrompt = `用户情况：
@@ -374,7 +421,8 @@ ${userNote ? `\n用户额外要求：${userNote}` : ''}
  */
 export function aiMealToMeal(
     ai: AIRecommendedMeal,
-    phase: number
+    phase: number,
+    calibrated?: { calories: number; protein: number; carbs: number; fat: number }
 ): Meal {
     const now = new Date().toISOString()
     const id = `ai-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
@@ -384,10 +432,10 @@ export function aiMealToMeal(
         name: ai.name,
         mealType: ai.mealType,
         phase: [phase],
-        calories: ai.calories,
-        protein: ai.protein,
-        carbs: ai.carbs,
-        fat: ai.fat,
+        calories: calibrated?.calories ?? ai.calories,
+        protein: calibrated?.protein ?? ai.protein,
+        carbs: calibrated?.carbs ?? ai.carbs,
+        fat: calibrated?.fat ?? ai.fat,
         ingredients: ai.ingredients.map(ing => ({
             name: ing.name,
             amount: ing.amount,
@@ -395,7 +443,7 @@ export function aiMealToMeal(
             note: ing.note,
         })),
         steps: ai.steps,
-        tags: [...ai.tags, 'ai'],
+        tags: calibrated ? [...ai.tags, 'ai', 'calibrated'] : [...ai.tags, 'ai'],
         source: 'ai',
         createdAt: now,
         updatedAt: now,
@@ -454,5 +502,223 @@ export async function estimateIngredientsNutrition(
     } catch {
         console.error('AI 营养估算原始返回:', result.content)
         throw new Error(`AI 返回格式异常（前100字：${result.content.slice(0, 100)}…）`)
+    }
+}
+
+/**
+ * AI 周数据分析 — 教练视角的专业反馈
+ *
+ * 把本周的步数、摄入、运动、体重数据喂给 AI，
+ * 让 AI 从 4 个维度给出结构化分析和可执行的改进建议。
+ *
+ * 4 个维度：
+ *   1. 🔥 热量缺口 — 缺口大小是否合理
+ *   2. 💪 蛋白质摄入 — 基于用户目标的蛋白建议
+ *   3. 👟 运动与步数 — NEAT + 正式训练评估
+ *   4. ⚖️ 体重趋势 — 变化速度是否健康
+ */
+export async function analyzeWeek(
+    config: DeepSeekConfig,
+    profile: UserProfile,
+    dailySnapshots: DailySnapshot[],
+    exercises: ExerciseRecord[],
+    weightTrend: { date: string; weightKg: number }[]
+): Promise<WeekAnalysis> {
+    // ── 汇总数据 ──
+    const sorted = [...dailySnapshots].sort((a, b) => a.date.localeCompare(b.date))
+    const avgSteps = Math.round(sorted.reduce((s, d) => s + d.steps, 0) / sorted.length) || 0
+    const totalCalsIn = sorted.reduce((s, d) => s + (d.caloriesIn || 0), 0)
+    const avgCalsIn = Math.round(totalCalsIn / sorted.length) || 0
+    const planDays = sorted.filter(d => d.ateOnPlan).length
+    const totalExtra = sorted.reduce((s, d) => s + (d.extraCalories || 0), 0)
+
+    const totalExMins = exercises.reduce((s, e) => s + e.durationMinutes, 0)
+    const totalExCals = exercises.reduce((s, e) => s + e.calories, 0)
+    const exTypes = [...new Set(exercises.map(e => e.type))]
+
+    // 体重变化
+    let weightChange = 0
+    let weightNote = '无数据'
+    if (weightTrend.length >= 2) {
+        const first = weightTrend[0].weightKg
+        const last = weightTrend[weightTrend.length - 1].weightKg
+        weightChange = +(last - first).toFixed(1)
+        weightNote = `${weightChange > 0 ? '+' : ''}${weightChange}kg`
+    }
+
+    // ── 构造每日表格 ──
+    const dayTable = sorted.map(d => {
+        const dayExs = exercises.filter(e => e.date === d.date)
+        const exStr = dayExs.length > 0
+            ? dayExs.map(e => `${e.type}${e.durationMinutes}min`).join('、')
+            : '无'
+        return `| ${d.date.slice(5)} | ${d.steps.toLocaleString()} | ${d.caloriesIn || '-'} | ${d.protein != null ? Math.round(d.protein) : '-'} | ${d.extraCalories || 0} | ${d.ateOnPlan ? '✅' : '❌'} | ${exStr} |`
+    }).join('\n')
+
+    // ── System Prompt ──
+    const systemPrompt = `你是一位资深健身教练（同时持有中国注册营养师和 NSCA-CSCS
+    认证），专门为中国久坐上班族做身体塑形指导。
+
+    你的任务是对用户本周数据做专业复盘。要求：
+    - 语气：专业但接地气，像教练和朋友聊天（可以适当用 emoji）
+    - 分析要有数据支撑，不要泛泛而谈
+    - 每个维度的建议必须具体可执行（"多吃蛋白"不可接受，"午餐加一颗水煮蛋或一盒牛奶"才可以）
+    - 从以下 4 个维度逐一分析：
+        1. 🔥 热量缺口 — 缺口大小是否合理（减脂期 300-500kcal 为宜）
+        2. 💪 蛋白质摄入 — 根据体重建议蛋白量（减脂期 2.0-2.2g/kg），给具体食物建议
+        3. 👟 运动与步数 — NEAT（日常步数）+ 正式训练评估
+        4. ⚖️ 体重趋势 — 变化速度是否健康（减脂期每周 0.3-0.8kg 为宜），过快/过慢都要指出
+    - - 绝对不要提及任何第三方 App 或产品名称（如薄荷健康、Keep、MyFitnessPal 等），只给通用建议
+    - 最后给出「下周重点关注」一句话
+    - 只输出 JSON，不要解释`
+
+    // ── User Prompt ──
+    const userPrompt = `用户档案：
+    - 性别：${profile.gender === 'male' ? '男' : '女'}，年龄：${profile.age}岁
+    - 身高：${profile.heightCm}cm，体重：${profile.currentWeightKg}kg
+    - 目标体重：${profile.targetWeightKg}kg，目标体脂：${profile.targetBodyFatPercent}%
+    - 当前阶段：Phase ${profile.currentPhase}（1=适应期 2=强化期 3=冲刺期）
+    - 每日步数目标：${profile.dailyStepsGoal}步
+
+    本周数据（${sorted[0]?.date || '-'} ~ ${sorted[sorted.length - 1]?.date || '-'}）：
+
+    每日明细：
+    | 日期 | 步数 | 摄入kcal | 蛋白g | 额外摄入 | 饮食达标 | 运动 |
+    |------|------|---------|-------|---------|---------|------|
+    ${dayTable}
+
+    周统计：
+    - 日均步数：${avgSteps}（目标 ${profile.dailyStepsGoal}，达成率 ${Math.round(avgSteps /
+        profile.dailyStepsGoal * 100)}%）
+    - 日均摄入：${avgCalsIn} kcal
+    - 日均蛋白：${Math.round(sorted.reduce((s, d) => s + (d.protein || 0), 0) / sorted.length)}g
+    - 日均碳水：${Math.round(sorted.reduce((s, d) => s + (d.carbs || 0), 0) / sorted.length)}g
+    - 日均脂肪：${Math.round(sorted.reduce((s, d) => s + (d.fat || 0), 0) / sorted.length)}g
+    - 饮食达标：${planDays}/${sorted.length} 天
+    - 本周额外摄入合计：${totalExtra} kcal（零食/宵夜/加餐）
+    - 运动总时长：${totalExMins} 分钟，总消耗 ${totalExCals} kcal
+    - 运动类型：${exTypes.length > 0 ? exTypes.join('、') : '无'}
+    - 体重变化：${weightNote}
+
+    请用以下 JSON 格式回复（不要输出其他内容）：
+    {
+        "overview": "一句话总评（10-20字）",
+        "overallRating": "excellent" | "good" | "warning" | "poor",
+        "sections": [
+        {
+            "emoji": "🔥",
+            "title": "热量缺口",
+            "content": "数据分析（2-3句）",
+            "suggestion": "具体可执行的改进建议（1-2句）",
+            "rating": "great" | "good" | "warning" | "poor"
+        },
+        {
+            "emoji": "💪",
+            "title": "蛋白质摄入",
+            "content": "数据分析（2-3句）",
+            "suggestion": "具体可执行的改进建议（1-2句）",
+            "rating": "great" | "good" | "warning" | "poor"
+        },
+        {
+            "emoji": "👟",
+            "title": "运动与步数",
+            "content": "数据分析（2-3句）",
+            "suggestion": "具体可执行的改进建议（1-2句）",
+            "rating": "great" | "good" | "warning" | "poor"
+        },
+        {
+            "emoji": "⚖️",
+            "title": "体重趋势",
+            "content": "数据分析（2-3句）",
+            "suggestion": "具体可执行的改进建议（1-2句）",
+            "rating": "great" | "good" | "warning" | "poor"
+        }
+        ],
+        "nextWeekFocus": "下周最重要的一个改进点（一句话）"
+    }
+
+    rating 含义：great=超出预期, good=达标, warning=需要关注, poor=亟需改善`
+
+    // ── 调用 AI ──
+    const result = await chat(config, [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+    ])
+
+    const jsonStr = result.content
+        .replace(/```json\s*/g, '')
+        .replace(/```\s*/g, '')
+        .trim()
+
+    try {
+        const data = JSON.parse(jsonStr) as WeekAnalysis
+        if (!data.overview || !data.sections || data.sections.length === 0) {
+            throw new Error('AI 返回缺少必要字段')
+        }
+        return data
+    } catch (e) {
+        if (e instanceof Error && e.message.startsWith('AI 返回')) throw e
+        console.error('AI 周分析原始返回:', result.content)
+        throw new Error(`AI 返回格式异常（前100字：${result.content.slice(0, 100)}…）`)
+    }
+}
+
+/**
+ * 用本地食材库校准一道菜的营养数据
+ *
+ * 流程：食材精确/别名匹配 → 按克重计算营养 → 汇总
+ * 如果所有食材都命中 → 返回校准值
+ * 如果部分未命中 → 返回 null（不强行改，避免半对半错）
+ *
+ * 注意：自动加上 5g 烹调油（约 45 kcal），因为 AI 的估算里通常隐含油
+ */
+export async function calibrateMealNutrition(
+    ingredients: Ingredient[]
+): Promise<{ calories: number; protein: number; carbs: number; fat: number } | null> {
+    const allRefs = await db.foodReferences.toArray()
+    const nameMap = new Map<string, typeof allRefs[0]>()
+
+    // 建索引：精确名 + 别名
+    for (const ref of allRefs) {
+        nameMap.set(ref.name, ref)
+        if (ref.aliases) {
+            for (const alias of ref.aliases) {
+                if (!nameMap.has(alias)) nameMap.set(alias, ref)
+            }
+        }
+    }
+
+    let totalKcal = 0, totalProtein = 0, totalCarbs = 0, totalFat = 0
+
+    for (const ing of ingredients) {
+        const ref = nameMap.get(ing.name)
+        if (!ref) return null  // 有食材未命中 → 放弃校准
+
+        // 单位换算
+        let grams: number
+        if (ing.unit === 'g' || ing.unit === 'ml') {
+            grams = ing.amount
+        } else if (ref.unitWeight && ref.unitName === ing.unit) {
+            grams = ing.amount * ref.unitWeight
+        } else {
+            return null  // 单位不匹配 → 放弃
+        }
+
+        const ratio = grams / 100
+        totalKcal += ref.kcalPer100 * ratio
+        totalProtein += ref.proteinPer100 * ratio
+        totalCarbs += ref.carbsPer100 * ratio
+        totalFat += ref.fatPer100 * ratio
+    }
+
+    // 中餐自动加 5g 烹调油
+    totalKcal += 45
+    totalFat += 5
+
+    return {
+        calories: Math.round(totalKcal),
+        protein: +totalProtein.toFixed(1),
+        carbs: +totalCarbs.toFixed(1),
+        fat: +totalFat.toFixed(1),
     }
 }

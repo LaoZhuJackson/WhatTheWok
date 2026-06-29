@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { getMealById, saveMeal, getAllMeals, getUserProfile, bulkSaveMeals } from '../db'
 import type { Meal, MealType, Ingredient, FoodReference } from '../models'
-import { getDeepSeekConfig, generateMealSuggestion, generateBatchMeals, estimateIngredientsNutrition } from '../services'
+import { getDeepSeekConfig, generateMealSuggestion, generateBatchMeals, estimateIngredientsNutrition, calibrateMealNutrition } from '../services'
 import type { AIRecommendedMeal } from '../services'
 import { calcBMR, calcTDEE, calcCuttingCalories, calcMacros } from '../engine'
 import { db } from '../db'
@@ -213,11 +213,13 @@ export default function MealEditor({ mealId, onClose }: MealEditorProps) {
                     config, profile, macros, genMealType,
                     mealTargets[genMealType], genPhase, existingNames, userNote || undefined
                 )
-                fillFormFromAI(ai)
+                const calib = await calibrateAI(ai)
+                fillFormFromAI(ai, calib)
                 setSelectedTags([...ai.tags, 'ai'])
                 const u1 = (ai as any)._usage
                 if (u1) setAiUsage({ prompt: u1.prompt_tokens, completion: u1.completion_tokens, total: u1.total_tokens })
-                toast.show(`AI 已生成「${ai.name}」— ${ai.reason}${u1 ? `（${u1.total_tokens} tokens）` : ''}`, 'success')
+                const calibTag = calib ? ' ✅已校准' : ''
+                toast.show(`AI 已生成「${ai.name}」— ${ai.reason}${u1 ? `（${u1.total_tokens} tokens）` : ''}${calibTag}`, 'success')
                 success = true
             } else {
                 // ── 批量生成 ──
@@ -235,9 +237,11 @@ export default function MealEditor({ mealId, onClose }: MealEditorProps) {
 
                 setAiQueue(meals)
                 setAiQueueIndex(0)
-                fillFormFromAI(meals[0])
+                const calib0 = await calibrateAI(meals[0])
+                fillFormFromAI(meals[0], calib0)
                 setSelectedTags([...meals[0].tags, 'ai'])
-                toast.show(`已生成 ${meals.length} 道菜，当前第 1/${meals.length} 道 — 请审核后保存`, 'success')
+                const calibCount = (await Promise.all(meals.map(m => calibrateAI(m)))).filter(Boolean).length
+                toast.show(`已生成 ${meals.length} 道菜，当前第 1/${meals.length} 道 — 请审核后保存${calibCount > 0 ? `（${calibCount} 道已校准）` : ''}`, 'success')
                 success = true
 
                 // 补标签库
@@ -368,7 +372,8 @@ export default function MealEditor({ mealId, onClose }: MealEditorProps) {
         const nextIdx = aiQueueIndex + 1
         if (nextIdx < aiQueue.length) {
             setAiQueueIndex(nextIdx)
-            fillFormFromAI(aiQueue[nextIdx])
+            const calib = await calibrateAI(aiQueue[nextIdx])
+            fillFormFromAI(aiQueue[nextIdx], calib)
             setSelectedTags([...aiQueue[nextIdx].tags, 'ai'])
             toast.show(`已保存！当前第 ${nextIdx + 1}/${aiQueue.length} 道 — ${aiQueue[nextIdx].name}`, 'success')
         } else {
@@ -398,14 +403,24 @@ export default function MealEditor({ mealId, onClose }: MealEditorProps) {
         setSaving(true)
         const remaining = aiQueue.slice(aiQueueIndex)
         const now = new Date().toISOString()
-        const toSave: Meal[] = remaining.map(ai => ({
-            id: 'ai-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6),
-            name: ai.name, mealType: ai.mealType, phase: [dialogPhase],
-            calories: ai.calories, protein: ai.protein, carbs: ai.carbs, fat: ai.fat,
-            ingredients: ai.ingredients.map(i => ({ name: i.name, amount: i.amount, unit: i.unit || 'g', note: i.note })),
-            steps: ai.steps, tags: [...ai.tags, 'ai'], source: 'ai' as const,
-            createdAt: now, updatedAt: now,
-        }))
+        // 逐道校准后保存
+        const calibResults = await Promise.all(remaining.map(ai => calibrateAI(ai)))
+        const toSave: Meal[] = remaining.map((ai, i) => {
+            const calib = calibResults[i]
+            return {
+                id: 'ai-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6),
+                name: ai.name, mealType: ai.mealType, phase: [dialogPhase],
+                calories: calib?.calories ?? ai.calories,
+                protein: calib?.protein ?? ai.protein,
+                carbs: calib?.carbs ?? ai.carbs,
+                fat: calib?.fat ?? ai.fat,
+                ingredients: ai.ingredients.map(i => ({ name: i.name, amount: i.amount, unit: i.unit || 'g', note: i.note })),
+                steps: ai.steps,
+                tags: calib ? [...ai.tags, 'ai', 'calibrated'] : [...ai.tags, 'ai'],
+                source: 'ai' as const,
+                createdAt: now, updatedAt: now,
+            }
+        })
         await bulkSaveMeals(toSave)
         setAiQueue([])
         setSaving(false)
@@ -432,13 +447,23 @@ export default function MealEditor({ mealId, onClose }: MealEditorProps) {
         return () => clearTimeout(timer)
     }, [stepList, ingredients])
 
+    /** 用本地食材库校准 AI 菜品营养，全部命中返回校准值，否则 null */
+    async function calibrateAI(ai: AIRecommendedMeal) {
+        return await calibrateMealNutrition(
+            ai.ingredients.map(i => ({ name: i.name, amount: i.amount, unit: i.unit || 'g' }))
+        )
+    }
+
     /** 把 AI 返回数据填入编辑表单 */
-    function fillFormFromAI(ai: { name: string; calories: number; protein: number; carbs: number; fat: number; ingredients: { name: string; amount: number; unit: string; note?: string }[]; steps: string; tags: string[]; reason?: string }) {
+    function fillFormFromAI(
+        ai: AIRecommendedMeal,
+        calibrated?: { calories: number; protein: number; carbs: number; fat: number } | null
+    ) {
         setName(ai.name)
-        setCalories(ai.calories)
-        setProtein(ai.protein)
-        setCarbs(ai.carbs)
-        setFat(ai.fat)
+        setCalories(calibrated?.calories ?? ai.calories)
+        setProtein(calibrated?.protein ?? ai.protein)
+        setCarbs(calibrated?.carbs ?? ai.carbs)
+        setFat(calibrated?.fat ?? ai.fat)
         setIngredients(ai.ingredients.map(i => ({
             name: i.name,
             amount: i.amount,

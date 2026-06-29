@@ -81,6 +81,13 @@ export default function HomePage() {
         if(!recommendation) return
         const today = toLocalDate(new Date())
         const weekStart = getMonday(new Date())
+
+        // 汇总三餐宏量营养素
+        const mealRecs = Object.values(recommendation.meals)
+        const totalProtein = mealRecs.reduce((s, r) => s + (r?.meal.protein ?? 0), 0)
+        const totalCarbs = mealRecs.reduce((s, r) => s + (r?.meal.carbs ?? 0), 0)
+        const totalFat = mealRecs.reduce((s, r) => s + (r?.meal.fat ?? 0), 0)
+
         db.weeklyLogs.get(weekStart).then(log => {
             const existing = log?.dailySnapshots.find(d => d.date === today)
             upsertDailySnapshot(weekStart, {
@@ -89,6 +96,9 @@ export default function HomePage() {
                 ateOnPlan: existing?.ateOnPlan ?? false,
                 training: existing?.training || 'none',
                 caloriesIn: recommendation.totalCalories,
+                protein: totalProtein,
+                carbs: totalCarbs,
+                fat: totalFat,
             })
         })
     }, [recommendation])

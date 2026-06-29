@@ -12,6 +12,8 @@ import {
     deleteExerciseRecord,
 } from '../db'
 import { calcStepsCalories, calcBMR } from '../engine'
+import { getDeepSeekConfig, analyzeWeek } from '../services/deepseek'
+import type { WeekAnalysis } from '../services/deepseek'
 import { toLocalDate, parseLocalDate, getMonday, addDays } from '../utils/date'
 import type { WeeklyLog, DailySnapshot, BodyMeasurement, ExerciseRecord, UserProfile } from '../models'
 
@@ -111,11 +113,32 @@ export default function HistoryPage() {
     // 本周运动记录
     const [exercises, setExercises] = useState<ExerciseRecord[]>([])
 
+    // AI 分析
+    const [analysis, setAnalysis] = useState<WeekAnalysis | null>(null)
+    const [analyzing, setAnalyzing] = useState(false)
+    const [analysisError, setAnalysisError] = useState('')
+
     useEffect(() => {
         loadWeek(weekStart)
         loadMeasurements()
         loadProfile()
         loadExercises(weekStart)
+    }, [weekStart])
+
+    // AI 分析缓存：切换周时检查
+    useEffect(() => {
+        const cached = localStorage.getItem(`ai_analysis_${weekStart}`)
+        if (cached) {
+            try {
+                setAnalysis(JSON.parse(cached))
+                setAnalysisError('')
+            } catch {
+                setAnalysis(null)
+            }
+        } else {
+            setAnalysis(null)
+            setAnalysisError('')
+        }
     }, [weekStart])
 
     async function loadWeek(ws: string) {
@@ -157,7 +180,7 @@ export default function HistoryPage() {
             upsertDailySnapshot(weekStart, merged)
             return next
         })
-        toast.show('已自动保存', 'success', 1200)
+        // toast.show('已自动保存', 'success', 1200)
     }
 
     // ── 运动记录操作 ──
@@ -195,6 +218,36 @@ export default function HistoryPage() {
         setDirty(false)
         setSaving(false)
         toast.show('已保存', 'success', 1500)
+    }
+
+    async function handleAnalyze() {
+        setAnalyzing(true)
+        setAnalysisError('')
+        try {
+            const config = await getDeepSeekConfig()
+            if (!config) {
+                setAnalysisError('请先在设置页配置 DeepSeek API Key')
+                setAnalyzing(false)
+                return
+            }
+            if (!profile) {
+                setAnalysisError('请先在设置页填写身体档案')
+                setAnalyzing(false)
+                return
+            }
+            const days = log?.dailySnapshots || []
+            const WeightTrend = measurements
+                .slice() // measurements 已排序(近→远)，取本周相关的
+                .filter(m => m.date >= weekStart)
+                .reverse() // 翻转为 远→近
+            const result = await analyzeWeek(config, profile, days, exercises, WeightTrend)
+            setAnalysis(result)
+            localStorage.setItem(`ai_analysis_${weekStart}`, JSON.stringify(result))
+        } catch (e) {
+            setAnalysisError(e instanceof Error ? e.message : '分析失败，请重试')
+        } finally {
+            setAnalyzing(false)
+        }
     }
 
     // ── 导航 ──
@@ -279,6 +332,101 @@ export default function HistoryPage() {
                 <StatCard label="运动消耗" value={`${exerciseCals}`} unit="kcal" />
                 <StatCard label="步数消耗" value={`${Math.round(totalCalFromSteps / 7)}`} unit="kcal/天" />
                 <StatCard label="周均缺口" value={`${deficitSign}${avgDeficit}`} unit="kcal/天" highlight={avgDeficit >= 200} />
+                <StatCard label="日均蛋白" value={`${Math.round(days.reduce((s, d) => s + (d.protein || 0), 0) / 7)}`} unit="g/天" />
+                <StatCard label="日均碳水" value={`${Math.round(days.reduce((s, d) => s + (d.carbs || 0), 0) / 7)}`} unit="g/天" />
+                <StatCard label="日均脂肪" value={`${Math.round(days.reduce((s, d) => s + (d.fat || 0), 0) / 7)}`} unit="g/天" />
+            </div>
+
+            {/* ── AI 本周分析 ── */}
+            <div className="bg-white rounded-xl border border-gray-100 p-4">
+                <h3 className="text-xs text-gray-500 mb-3 font-medium">🤖 AI 本周分析</h3>
+
+                {/* 空态：未分析 */}
+                {!analysis && !analyzing && !analysisError && (
+                    <div className="text-center py-3">
+                        <p className="text-xs text-gray-400 mb-2">让 AI 教练帮你解读本周数据，给出专业反馈</p>
+                        <button
+                            onClick={handleAnalyze}
+                            className="px-4 py-2 bg-indigo-500 text-white text-sm rounded-xl font-medium hover:bg-indigo-600 active:scale-95 transition-all"
+                        >
+                            🤖 开始分析
+                        </button>
+                    </div>
+                )}
+
+                {/* 加载态 */}
+                {analyzing && (
+                    <div className="flex items-center justify-center py-4 gap-2">
+                        <span className="animate-spin text-lg">⏳</span>
+                        <span className="text-sm text-gray-400">AI 教练分析中，大约需要 10-20 秒…</span>
+                    </div>
+                )}
+
+                {/* 错误态 */}
+                {analysisError && (
+                    <div className="text-center py-3">
+                        <p className="text-xs text-red-500 mb-2">{analysisError}</p>
+                        <button
+                            onClick={handleAnalyze}
+                            className="px-3 py-1.5 text-xs text-indigo-500 border border-indigo-200 rounded-lg hover:bg-indigo-50"
+                        >
+                            🔄 重试
+                        </button>
+                    </div>
+                )}
+
+                {/* 完成态 */}
+                {analysis && !analyzing && (
+                    <div className="space-y-3">
+                        {/* 总体评价 */}
+                        <div className={`px-3 py-2 rounded-lg text-sm font-medium ${analysis.overallRating ===
+                            'excellent' ? 'bg-green-50 text-green-700' :
+                            analysis.overallRating === 'good' ? 'bg-green-50 text-green-600' :
+                                analysis.overallRating === 'warning' ? 'bg-yellow-50 text-yellow-700' :
+                                    'bg-red-50 text-red-600'
+                            }`}>
+                            📊 {analysis.overview}
+                        </div>
+
+                        {/* 四个维度 */}
+                        {analysis.sections.map((sec, i) => {
+                            const ratingIcon = sec.rating === 'great' ? '✅' : sec.rating === 'good' ? '✅' : sec.rating === 'warning' ? '⚠️' : '❌'
+                            const ratingBg = sec.rating === 'great' ? 'border-green-200 bg-green-50/50' : sec.rating === 'good' ? 'border-green-100 bg-green-50/30' : sec.rating === 'warning' ? 'border-yellow-200 bg-yellow-50/50' : 'border-red-200 bg-red-50/50'
+                            return (
+                                <div key={i} className={`border rounded-lg px-3 py-2.5 ${ratingBg}`}>
+                                    <div className="flex items-center gap-1.5 mb-1">
+                                        <span className="text-base">{sec.emoji}</span>
+                                        <span className="text-xs font-semibold text-gray-700">{sec.title}</span>
+                                        <span className="text-xs ml-auto">{ratingIcon}</span>
+                                    </div>
+                                    <p className="text-xs text-gray-600 leading-relaxed">{sec.content}</p>
+                                    <p className="text-xs text-indigo-600 mt-1.5 flex items-start gap-1">
+                                        <span className="shrink-0">💡</span>
+                                        <span>{sec.suggestion}</span>
+                                    </p>
+                                </div>
+                            )
+                        })}
+
+                        {/* 下周重点关注 */}
+                        <div className="border-t border-gray-100 pt-2.5">
+                            <p className="text-xs text-gray-500">
+                                <span className="font-semibold text-gray-700">🎯 下周重点关注：</span>
+                                {analysis.nextWeekFocus}
+                            </p>
+                        </div>
+
+                        {/* 重新分析按钮 */}
+                        <div className="text-center">
+                            <button
+                                onClick={handleAnalyze}
+                                className="px-3 py-1 text-[10px] text-gray-400 hover:text-indigo-500 transition-colors"
+                            >
+                                🔄 重新分析
+                            </button>
+                        </div>
+                    </div>
+                )}
             </div>
 
             {/* ── 每日步数柱状图 ── */}
@@ -394,12 +542,14 @@ export default function HistoryPage() {
             </div>
 
             {/* ── 体重趋势 ── */}
-            {measurements.length >= 2 && (
-                <div className="bg-white rounded-xl border border-gray-100 p-4">
-                    <h3 className="text-xs text-gray-500 mb-3 font-medium">体重趋势</h3>
-                    <WeightTrend data={measurements} />
-                </div>
-            )}
+            {
+                measurements.length >= 2 && (
+                    <div className="bg-white rounded-xl border border-gray-100 p-4">
+                        <h3 className="text-xs text-gray-500 mb-3 font-medium">体重趋势</h3>
+                        <WeightTrend data={measurements} />
+                    </div>
+                )
+            }
 
             {/* ── 周笔记 ── */}
             <div className="bg-white rounded-xl border border-gray-100 p-4 space-y-2">
@@ -414,18 +564,20 @@ export default function HistoryPage() {
             </div>
 
             {/* ── 保存 ── */}
-            {dirty && (
-                <button
-                    onClick={handleSave}
-                    disabled={saving}
-                    className="w-full py-3 bg-green-500 text-white rounded-xl font-medium hover:bg-green-600 active:scale-[0.98] transition-all text-sm"
-                >
-                    {saving ? '保存中…' : '💾 保存本周记录'}
-                </button>
-            )}
+            {
+                dirty && (
+                    <button
+                        onClick={handleSave}
+                        disabled={saving}
+                        className="w-full py-3 bg-green-500 text-white rounded-xl font-medium hover:bg-green-600 active:scale-[0.98] transition-all text-sm"
+                    >
+                        {saving ? '保存中…' : '💾 保存本周记录'}
+                    </button>
+                )
+            }
 
             <div className="h-4" />
-        </div>
+        </div >
     )
 }
 
@@ -512,7 +664,7 @@ function DayRow({ day, stepGoal, exercises, weightKg, bmr, onChange, onAddExerci
                         <input
                             type='number'
                             value={day.extraCalories || ''}
-                            onChange={e => onChange({extraCalories: +e.target.value})}
+                            onChange={e => onChange({ extraCalories: +e.target.value })}
                             onBlur={() => setShowExtra(false)}
                             placeholder='0'
                             className="w-12 text-xs border border-red-200 rounded px-1 py-0.5 text-red-600 bg-red-50"
@@ -645,6 +797,15 @@ function DayRow({ day, stepGoal, exercises, weightKg, bmr, onChange, onAddExerci
                         </>
                     ) : (
                         <span className="text-gray-400">（未记录摄入）</span>
+                    )}
+                    {/* 宏量营养素 */}
+                    {day.protein != null && (
+                        <>
+                            <span className="text-gray-300">|</span>
+                            <span className="text-rose-500 font-mono">P:{Math.round(day.protein)}</span>
+                            <span className="text-amber-500 font-mono">C:{Math.round(day.carbs ?? 0)}</span>
+                            <span className="text-blue-500 font-mono">F:{Math.round(day.fat ?? 0)}</span>
+                        </>
                     )}
                 </div>
             )}
